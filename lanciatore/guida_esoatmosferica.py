@@ -1,4 +1,4 @@
-"""Guida attiva, fase esoatmosferica: tangente lineare (Step 4).
+"""Guida attiva, fase esoatmosferica: tangente lineare (Step 4/6, corretto Ciclo 7).
 
 Vettore di stato ``y = [x, h, vx, vh, m]`` (cartesiano, non polare come
 la Fase B del gravity turn dello Step 3): qui il controllo ``theta(t)``
@@ -6,30 +6,153 @@ e' gia' una funzione esplicita ed elementare di ``t``, quindi non serve
 ricostruire l'angolo della velocita' per applicare la legge di guida.
 
 Equazioni del moto (fase esoatmosferica: nessun drag, nessuna densita'
-atmosferica; gravita' linearizzata a valore costante sull'arco di
-manovra -- vedi sotto)::
+atmosferica)::
 
     dx/dt  = vx
     dh/dt  = vh
-    dvx/dt = (spinta/m) * cos(theta(t))
-    dvh/dt = (spinta/m) * sin(theta(t)) - g_costante
+    dvx/dt = (spinta/m) * cos(theta(t)) - vh*vx/(R_TERRA+h)
+    dvh/dt = (spinta/m) * sin(theta(t)) - g(h) + vx**2/(R_TERRA+h)
     dm/dt  = -mdot
 
 con ``theta(t) = arctan(A + B*t)`` (legge di guida a tangente lineare) e
-``g_costante`` un parametro passato esplicitamente dal chiamante (es.
-valutato una volta con ``lanciatore.gravita.accelerazione_gravita`` alla
-quota iniziale della fase), NON ricalcolato a ogni passo
-dell'integrazione: la costanza di ``g`` e' l'approssimazione dichiarata
-intrinseca alla tecnica della tangente lineare (e' cio' che la rende
-"lineare" invece che accoppiata a g(h) variabile), non una scorciatoia
-aggiuntiva di questo modulo.
+``g(h) = lanciatore.gravita.accelerazione_gravita(h)`` (riusata,
+ricalcolata a ogni passo -- NON piu' una costante congelata a monte,
+vedi sezione "Correzione fisica" sotto per il motivo).
 
-Fonte della tecnica (vincolo CLAUDE.md, "Guida, fase esoatmosferica"):
-Perkins, F.M., "Derivation of Linear-Tangent Steering Laws". La
-derivazione qui sotto e' rifatta da principi primi (calcolo delle
-variazioni / principio del massimo di Pontryagin), non riprodotta
-letteralmente dal testo originale (nessun accesso web disponibile,
-stesso limite gia' gestito per Culler & Fried allo Step 3).
+Fonte della tecnica di guida (vincolo CLAUDE.md, "Guida, fase
+esoatmosferica"): Perkins, F.M., "Derivation of Linear-Tangent Steering
+Laws". La derivazione del controllo ottimo (sezione piu' sotto) e'
+rifatta da principi primi (calcolo delle variazioni / principio del
+massimo di Pontryagin), non riprodotta letteralmente dal testo
+originale (nessun accesso web disponibile, stesso limite gia' gestito
+per Culler & Fried allo Step 3).
+
+Correzione fisica (Ciclo 7): il termine di sollievo centripeto
+------------------------------------------------------------------
+**La scoperta.** Assemblando per la prima volta una traiettoria
+completa con dati reali (Falcon 9 Block 5, Wikipedia, vedi
+``lanciatore/validazione.py`` e STATUS.md Ciclo 7), con il modello
+originale a gravita' CONGELATA costante (``g_costante`` valutato una
+volta a monte, mai piu' ricalcolato) la velocita' orbitale a 200 km
+(~7788 m/s) risultava IRRAGGIUNGIBILE dallo Stadio 2 per qualunque
+coppia ``A, B``, con un deficit di ~350 m/s anche a payload zero.
+Causa: vicino alla velocita' orbitale il "sollievo centripeto" dovuto
+alla curvatura della traiettoria attorno alla Terra, ``vx**2/(R_TERRA+h)``,
+diventa comparabile alla gravita' stessa (per definizione, all'orbita
+circolare ``v_orbitale**2/r = g(r)`` esattamente): un modello che lo
+ignora sovrastima sistematicamente il "peso" da vincere man mano che
+``vx`` cresce, e diventa via via piu' sbagliato proprio nel regime che
+piu' conta per l'iniezione orbitale.
+
+**La derivazione completa (coordinate polari locali).** Sia ``r =
+R_TERRA + h`` la distanza dal centro della Terra e ``phi`` l'angolo
+sotteso (downrange). Le equazioni del moto in campo centrale (nessuna
+spinta, nessun drag) sono, in coordinate polari::
+
+    r'' - r*(phi')**2 = -g(r)                    (radiale)
+    r*phi'' + 2*r'*phi' = 0                        (tangenziale, <=>
+                                                     d/dt[r**2 * phi'] = 0,
+                                                     conservazione del
+                                                     momento angolare)
+
+Con ``vh = dh/dt = r'`` (velocita' radiale) e ``vx = r*phi'`` (velocita'
+tangenziale, cio' che nel resto del modulo si chiama semplicemente "la
+componente orizzontale della velocita'"):
+
+- ``dvx/dt = d(r*phi')/dt = r'*phi' + r*phi'' = (vh/r)*vx + r*phi''``.
+  Dall'equazione tangenziale, ``r*phi'' = -2*r'*phi' = -2*vh*vx/r``,
+  quindi ``dvx/dt = vh*vx/r - 2*vh*vx/r = -vh*vx/r``.
+- ``dvh/dt = r'' = r*(phi')**2 - g(r) = vx**2/r - g(r)``.
+
+Aggiungendo la spinta (proiettata con l'angolo ``theta`` nel
+riferimento cartesiano locale, vedi sezione "Convenzione dell'angolo
+theta" sotto) si ottengono esattamente le due equazioni riportate in
+cima a questo modulo, con ``r = R_TERRA + h``. **I due termini nuovi
+(``-vh*vx/(R_TERRA+h)`` in ``dvx/dt`` e ``+vx**2/(R_TERRA+h)`` in
+``dvh/dt``) nascono dalla STESSA trasformazione geometrica**: non sono
+due correzioni indipendenti di cui si puo' scegliere di applicarne una
+sola, sono i due lati della stessa identita'.
+
+**La dimostrazione che serve ENTRAMBI i termini (non solo uno).** Nel
+limite balistico (``spinta=0``), dalle equazioni sopra si verifica per
+sostituzione diretta che sono conservati ESATTAMENTE:
+
+- il momento angolare specifico ``L = r*vx = vx*(R_TERRA+h)``:
+  ``dL/dt = r'*vx + r*dvx/dt = vh*vx + r*(-vh*vx/r) = vh*vx - vh*vx = 0``;
+- l'energia meccanica specifica
+  ``E = (vx**2+vh**2)/2 - MU_TERRA/(R_TERRA+h)``:
+  ``dE/dt = vx*dvx/dt + vh*dvh/dt + (MU_TERRA/r**2)*vh``
+  ``       = vx*(-vh*vx/r) + vh*(vx**2/r - g(r)) + (MU_TERRA/r**2)*vh``
+  ``       = -vh*g(r) + vh*MU_TERRA/r**2 = 0`` (perche' ``g(r) =
+  MU_TERRA/r**2`` esattamente, vedi ``lanciatore/gravita.py``).
+
+Una prima proposta di correzione (Ciclo 7, bozza iniziale
+dell'orchestratore, poi corretta dal reviewer) aggiungeva SOLO il
+termine in ``dvh/dt`` (il "sollievo centripeto" piu' intuitivo,
+motivato da ``v_orbitale**2/r = g``) senza il termine gemello in
+``dvx/dt``. Verificato numericamente (``scipy.integrate.solve_ivp``,
+``rtol=atol=1e-12``, condizioni iniziali arbitrarie, 200 s di
+integrazione balistica): con la correzione COMPLETA (entrambi i
+termini) ``L`` ed ``E`` si conservano a precisione di macchina (~1e-14
+di variazione relativa); con la correzione a META' (solo ``dvh/dt``),
+``E`` varia dello **0.197%** e ``L`` dell'**1.25%** sugli stessi 200 s
+-- un errore fisico reale (violazione di conservazione), non un
+dettaglio accademico. Questo modulo implementa la versione COMPLETA
+(vedi test di conservazione dedicati in
+``tests/test_guida_esoatmosferica.py``).
+
+**Perche' ``g(h)`` ora si ricalcola a ogni passo, invece di restare
+congelato.** Con il sollievo centripeto che dipende esplicitamente da
+``h`` (tramite ``R_TERRA+h`` al denominatore) e la traiettoria che ora
+sale di centinaia di km durante la fase esoatmosferica, congelare
+anche ``g`` al valore iniziale reintrodurrebbe un errore sistematico
+dello stesso tipo di quello appena corretto (anche se piu' piccolo:
+``g(h)`` varia di pochi punti percentuali su poche centinaia di km,
+contro il sollievo centripeto che vicino a ``v_orbitale`` e' comparabile
+a ``g`` stesso) -- e non costa nulla in piu' (``accelerazione_gravita``
+e' gia' vettorizzata e usata a ogni passo in Step 2/3/5). La firma di
+``derivate_stato_tangente_lineare`` NON accetta piu' ``g_costante``:
+e' un parametro rimosso, non un default nascosto.
+
+**Asimmetria dichiarata col gravity turn (Step 3, NON toccato in
+questo ciclo).** ``lanciatore/guida.py`` (Fase B del gravity turn)
+continua a usare l'equazione originale di Culler & Fried,
+``dgamma/dt = -(g(h)/v)*cos(gamma)``, senza alcun termine di sollievo
+centripeto -- quella derivazione e' presa cosi' com'e' dalla fonte
+citata allo Step 3 e non viene toccata da questa correzione. L'errore
+introdotto da questa omissione e' stato quantificato con i dati reali
+di validazione (Step 5/Ciclo 7, non stimato a occhio): a fine Stadio 1,
+``v**2/(R_TERRA+h)`` vale il **12.2%** di ``g(h)`` con i dati di spinta
+al livello del mare (v ~= 2756 m/s, h ~= 45.3 km) e il **17.3%** con i
+dati in vuoto (v ~= 3266 m/s, h ~= 80 km stimata) -- non trascurabile,
+ma sensibilmente piu' piccolo del quasi-100% raggiunto vicino alla
+velocita' orbitale (dove il gap era stato scoperto in questo modulo).
+La correzione al gravity turn resta esplicitamente FUORI SCOPE per
+questo ciclo (nessuna modifica a ``lanciatore/guida.py``): l'asimmetria
+e' dichiarata qui, non nascosta, e andra' rivalutata se in un ciclo
+futuro il contributo di questa approssimazione al bilancio di delta-v
+risultasse non trascurabile.
+
+**Nota sulla derivazione del controllo ottimo (sezione sotto) rispetto
+a questa correzione.** La derivazione a tangente lineare (Pontryagin,
+sezione seguente) assume esplicitamente gravita' linearizzata a valore
+costante sull'arco di manovra: e' quella linearizzazione a rendere il
+problema risolvibile in forma chiusa con costati lineari in ``t``. I
+due termini aggiunti qui rendono la dinamica EFFETTIVAMENTE integrata
+piu' accurata di quella linearizzata usata per DERIVARE la legge di
+controllo ``tan(theta) = A+B*t`` -- quindi, in senso stretto, con
+questa correzione la legge a tangente lineare non e' piu' l'ottimo
+matematico ESATTO della dinamica integrata (lo era per costruzione
+Step 4, quando dinamica di derivazione e dinamica integrata
+coincidevano). Resta pero' un profilo di guida valido e con senso
+fisico (e' esattamente cosi' che viene trattata anche nella pratica
+reale: il PEG, derivato dallo stesso principio, viene applicato a
+dinamiche via via piu' accurate del modello linearizzato usato per
+derivarlo). Il problema inverso (Step 6, ``risolvi_coefficienti_tangente_lineare``)
+gia' compensa questo scarto per costruzione, trovando i coefficienti
+``A, B`` che centrano il target usando la dinamica REALE (con
+``mdot!=0`` e ora con il sollievo centripeto), non quella linearizzata
+di derivazione.
 
 Derivazione (principio del massimo di Pontryagin)
 --------------------------------------------------
@@ -68,8 +191,8 @@ sotto). Si ottiene percio' esattamente::
 
 con ``A = lambda_vh(0) / lambda_vx`` e ``B = -lambda_h / lambda_vx``, due
 costanti libere determinate dalle condizioni al contorno sulla velocita'
-finale (problema di determinazione di A, B per un target reale: FUORI
-SCOPE di questo step, vedi sotto).
+finale (problema di determinazione di A, B per un target reale: vedi
+sezione Step 6 piu' sotto in questo modulo).
 
 Perche' serve h_f vincolata (B != 0): per lo stesso ragionamento di
 trasversalita' applicato alla quota, se ANCHE ``h_f`` fosse libera si
@@ -111,32 +234,40 @@ spinta che punta all'indietro (fuori scope qui).
 Confine di questo step (scope deciso esplicitamente)
 ------------------------------------------------------
 Questo modulo implementa e verifica la LEGGE di guida (la dinamica sotto
-``tan(theta) = A + B*t`` con ``A``, ``B`` DATI/noti), non la soluzione
-del problema al contorno generale (trovare ``A``, ``B`` per centrare un
-target orbitale reale -- in letteratura PEG questo e' un problema
-accoppiato risolto per iterazione/shooting, dato che con deplezione di
-massa reale l'accelerazione ``a(t)`` non e' costante e l'integrale non
-ha piu' forma chiusa). Trovare ``A``, ``B`` per un target di missione
-reale resta esplicitamente FUORI SCOPE qui (rimandato a quando servira'
-davvero, Step 5/6).
+``tan(theta) = A + B*t`` con ``A``, ``B`` DATI/noti, Step 4) E la
+soluzione del problema al contorno per un target di velocita' finale
+assegnato (root-finding via shooting, Step 6, sezione piu' sotto). Non
+implementa staging durante la fase esoatmosferica (Step 8) ne' la
+scelta di ``A, B`` per un target orbitale REALE completo con dati
+pubblici (assemblata in ``lanciatore/validazione.py``, Step 7, che
+riusa questo modulo cosi' com'e').
 """
 
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
 
+from lanciatore.costanti import R_TERRA
+from lanciatore.gravita import accelerazione_gravita
 
-def derivate_stato_tangente_lineare(t, y, A, B, spinta, mdot, g_costante):
+
+def derivate_stato_tangente_lineare(t, y, A, B, spinta, mdot):
     """Derivate del vettore di stato ``[x, h, vx, vh, m]`` (tangente lineare).
 
-    Equazioni (vedi docstring di modulo per la derivazione e la fonte):
+    Equazioni CORRETTE (Ciclo 7, vedi sezione "Correzione fisica" nella
+    docstring di modulo per la derivazione completa in coordinate
+    polari locali e la dimostrazione di conservazione E/L)::
+
         dx/dt  = vx
         dh/dt  = vh
-        dvx/dt = (spinta/m) * cos(theta(t))
-        dvh/dt = (spinta/m) * sin(theta(t)) - g_costante
+        dvx/dt = (spinta/m) * cos(theta(t)) - vh*vx/(R_TERRA+h)
+        dvh/dt = (spinta/m) * sin(theta(t)) - g(h) + vx**2/(R_TERRA+h)
         dm/dt  = -mdot
 
-    con ``theta(t) = arctan(A + B*t)``.
+    con ``theta(t) = arctan(A + B*t)`` e ``g(h) =
+    lanciatore.gravita.accelerazione_gravita(h)`` (ricalcolata a ogni
+    passo, NON piu' congelata a un valore costante -- vedi docstring di
+    modulo).
 
     Parametri
     ---------
@@ -148,20 +279,13 @@ def derivate_stato_tangente_lineare(t, y, A, B, spinta, mdot, g_costante):
     A, B : float
         Coefficienti della legge di guida a tangente lineare,
         ``tan(theta(t)) = A + B*t`` (``B`` in 1/s). Determinati a monte
-        dalle condizioni al contorno sulla velocita' finale (fuori
-        scope in questo modulo, vedi docstring di modulo).
+        dalle condizioni al contorno sulla velocita' finale (Step 4:
+        dati/noti; Step 6: risolti da ``risolvi_coefficienti_tangente_lineare``).
     spinta : float
         Spinta del motore, N.
     mdot : float
         Portata massica, kg/s (positiva; la massa diminuisce). Puo'
-        essere 0.0 (caso limite usato per il confronto in forma chiusa,
-        vedi tests/test_guida_esoatmosferica.py).
-    g_costante : float
-        Accelerazione di gravita', m/s^2, valutata UNA VOLTA a monte
-        (es. con lanciatore.gravita.accelerazione_gravita alla quota
-        iniziale della fase) e passata come costante per l'intera
-        integrazione: la costanza di g e' l'approssimazione dichiarata
-        della tecnica della tangente lineare, non ricalcolata qui.
+        essere 0.0.
 
     Ritorna
     -------
@@ -172,26 +296,26 @@ def derivate_stato_tangente_lineare(t, y, A, B, spinta, mdot, g_costante):
 
     theta = np.arctan(A + B * t)
     a = spinta / m
+    r = R_TERRA + h
 
     dx_dt = vx
     dh_dt = vh
-    dvx_dt = a * np.cos(theta)
-    dvh_dt = a * np.sin(theta) - g_costante
+    dvx_dt = a * np.cos(theta) - vh * vx / r
+    dvh_dt = a * np.sin(theta) - accelerazione_gravita(h) + vx**2 / r
     dm_dt = -mdot
 
     return np.array([dx_dt, dh_dt, dvx_dt, dvh_dt, dm_dt])
 
 
 def integra_tangente_lineare(
-    m0, spinta, mdot, A, B, g_costante, tf, x0=0.0, h0=0.0, vx0=0.0, vh0=0.0
+    m0, spinta, mdot, A, B, tf, x0=0.0, h0=0.0, vx0=0.0, vh0=0.0
 ):
     """Integra la dinamica a tangente lineare su un orizzonte temporale fisso.
 
     Nessun evento terminale: ``tf`` e' fisso e dato (coerente col
-    confine di scope di questo step, vedi docstring di modulo -- non e'
-    ancora presente ne' staging ne' una condizione di arresto legata al
-    raggiungimento di un target orbitale, che appartiene a step
-    successivi).
+    confine di scope di questo modulo -- non e' ancora presente ne'
+    staging ne' una condizione di arresto legata al raggiungimento di
+    un target orbitale, che appartiene a step successivi).
 
     Parametri
     ---------
@@ -204,8 +328,6 @@ def integra_tangente_lineare(
     A, B : float
         Coefficienti della legge di guida, vedi
         ``derivate_stato_tangente_lineare``.
-    g_costante : float
-        Accelerazione di gravita' costante per l'integrazione, m/s^2.
     tf : float
         Istante finale dell'integrazione, s (``t_span = (0.0, tf)``).
     x0, h0, vx0, vh0 : float, opzionali
@@ -220,7 +342,7 @@ def integra_tangente_lineare(
         ``.success``.
     """
     y0 = np.array([x0, h0, vx0, vh0, m0])
-    args = (A, B, spinta, mdot, g_costante)
+    args = (A, B, spinta, mdot)
 
     risultato = solve_ivp(
         derivate_stato_tangente_lineare,
@@ -242,9 +364,10 @@ def integra_tangente_lineare(
 # Problema inverso (Step 6): trovare A, B della guida a tangente lineare che
 # realizzano una velocita' terminale (vx_target, vh_target) assegnata, con
 # tf FISSO e deplezione di massa reale (mdot != 0 in generale, quindi
-# a(t) = spinta/m(t) NON e' costante e la forma chiusa dello Step 4
-# (asinh/sqrt) non si applica -- vedi "Confine di questo step" nella
-# docstring di modulo sopra).
+# a(t) = spinta/m(t) NON e' costante). Con la correzione fisica del Ciclo 7
+# non esiste piu' forma chiusa nemmeno nel caso limite mdot=0 (dvx/dt
+# dipende ora anch'esso da h/vh, non solo dvh/dt da g) -- vedi docstring di
+# modulo, sezione "Correzione fisica".
 # ---------------------------------------------------------------------------
 
 # Tolleranza di residuo ASSOLUTA (m/s) sulle componenti di velocita' per
@@ -271,7 +394,6 @@ def _residuo_velocita_finale(
     m0,
     spinta,
     mdot,
-    g_costante,
     tf,
     vx_target,
     vh_target,
@@ -282,16 +404,53 @@ def _residuo_velocita_finale(
 ):
     """Funzione residuo per fsolve: scarto tra velocita' terminale ottenuta e target.
 
-    Integra la dinamica ESISTENTE (``integra_tangente_lineare``, Step 4,
-    riusata senza alcuna modifica) con i coefficienti ``A, B`` correnti e
-    restituisce ``[vx(tf) - vx_target, vh(tf) - vh_target]``. Nessuna
-    reimplementazione della fisica: questa funzione e' puro glue code tra
-    ``fsolve`` e l'integratore gia' verificato allo Step 4.
+    Integra la dinamica ESISTENTE (``integra_tangente_lineare``, riusata
+    senza alcuna modifica strutturale oltre alla correzione fisica gia'
+    applicata a monte) con i coefficienti ``A, B`` correnti e restituisce
+    ``[vx(tf) - vx_target, vh(tf) - vh_target]``. Nessuna reimplementazione
+    della fisica: questa funzione e' puro glue code tra ``fsolve`` e
+    l'integratore.
+
+    Nota (scoperta empiricamente in questo ciclo, non prevista dal piano
+    originale): dopo la correzione fisica del Ciclo 7, ``g(h)`` e'
+    ricalcolata a ogni passo (non piu' congelata), quindi
+    ``accelerazione_gravita`` puo' sollevare ``ValueError`` per ``h<0``
+    durante l'integrazione. Con ``g_costante`` (Step 4/6 originali) questo
+    non poteva mai accadere (nessun vincolo di dominio su ``h``). Durante
+    l'esplorazione dello jacobiano/dei passi di Newton di ``fsolve``,
+    specialmente quando il target e' irraggiungibile (nessuna soluzione
+    esiste, fsolve tenta passi via via piu' estremi), alcune coppie
+    ``(A, B)`` di tentativo producono traiettorie che scendono sotto quota
+    zero, facendo sollevare ``ValueError`` -- verificato che questo
+    accade per QUALUNQUE target irraggiungibile provato (non e' un
+    problema risolvibile scegliendo un margine di quota iniziale diverso,
+    e' strutturale: un residuo enorme genera comunque passi di Newton
+    enormi). ``fsolve`` non sa gestire eccezioni Python: qui la
+    traiettoria fisicamente non valida viene trattata come un punto del
+    dominio ``(A, B)`` con residuo enorme ma FINITO, evitando che l'intera
+    chiamata crashi con un'eccezione Python grezza.
+
+    Verificato empiricamente (critic-ingegnere, Ciclo 7) che il residuo
+    costante NON fornisce alcun gradiente utile a ``fsolve`` dentro la
+    regione non valida (lo Jacobiano a differenze finite risulta
+    ESATTAMENTE zero li' dentro): il fallback e' un MURO che impedisce il
+    crash e trasforma il fallimento in un ``ier`` MINPACK riconoscibile,
+    non un PENDIO che guida l'ottimizzatore fuori dalla zona non valida.
+    La rete di sicurezza reale contro un esito sbagliato resta il
+    controllo combinato gia' presente in ``risolvi_coefficienti_tangente_lineare``
+    (flag ``ier`` + residuo effettivo + accordo tra guess primario e
+    perturbato): se il target e' irraggiungibile o il guess cade nella
+    zona non valida, il risultato finale resta un fallimento esplicito
+    (``RuntimeError``), mai una convergenza silenziosa sbagliata
+    (verificato su 30 guess di stress test, 0 convergenze errate).
     """
     A, B = coefficienti
-    risultato = integra_tangente_lineare(
-        m0, spinta, mdot, A, B, g_costante, tf, x0=x0, h0=h0, vx0=vx0, vh0=vh0
-    )
+    try:
+        risultato = integra_tangente_lineare(
+            m0, spinta, mdot, A, B, tf, x0=x0, h0=h0, vx0=vx0, vh0=vh0
+        )
+    except ValueError:
+        return np.array([1e6, 1e6])
     vx_finale = risultato.y[2, -1]
     vh_finale = risultato.y[3, -1]
     return np.array([vx_finale - vx_target, vh_finale - vh_target])
@@ -301,7 +460,6 @@ def risolvi_coefficienti_tangente_lineare(
     m0,
     spinta,
     mdot,
-    g_costante,
     tf,
     vx_target,
     vh_target,
@@ -316,17 +474,17 @@ def risolvi_coefficienti_tangente_lineare(
 
     Trova, per shooting (``scipy.optimize.fsolve``), i coefficienti
     ``A, B`` tali che integrando ``derivate_stato_tangente_lineare`` (via
-    ``integra_tangente_lineare``, entrambe RIUSATE senza modifiche
-    dall'implementazione dello Step 4) su ``[0, tf]`` si ottenga
+    ``integra_tangente_lineare``) su ``[0, tf]`` si ottenga
     ``vx(tf) ~= vx_target`` e ``vh(tf) ~= vh_target``. Con ``mdot != 0``
-    reale l'accelerazione ``a(t) = spinta/m(t)`` non e' costante, quindi
-    non esiste una forma chiusa (a differenza del caso limite ``mdot = 0``
-    gia' verificato allo Step 4 con asinh/sqrt) e serve necessariamente
-    root-finding numerico.
+    reale l'accelerazione ``a(t) = spinta/m(t)`` non e' costante, e con la
+    correzione fisica del Ciclo 7 (sollievo centripeto) non esiste forma
+    chiusa nemmeno nel caso limite ``mdot = 0`` (vedi docstring di modulo):
+    serve necessariamente root-finding numerico in entrambi i casi.
 
-    Fenomeno delle radici multiple/spurie (scoperto empiricamente,
-    documentato qui invece di essere nascosto -- vedi STATUS.md, Ciclo 6,
-    addendum)
+    Fenomeno delle radici multiple/spurie (scoperto empiricamente allo
+    Step 6, documentato qui invece di essere nascosto -- vedi STATUS.md,
+    Ciclo 6, addendum; ri-verificato numericamente con la fisica corretta
+    del Ciclo 7, vedi STATUS.md Ciclo 7 e test dedicato)
     ---------------------------------------------------------------------
     Il sistema ``(A, B) -> (vx(tf), vh(tf))`` NON e' iniettivo: per la
     stessa coppia di target esistono (almeno) due radici distinte di
@@ -340,15 +498,13 @@ def risolvi_coefficienti_tangente_lineare(
     (``B0 = 0``) o di segno opposto al vero, ``fsolve`` converge quasi
     sempre alla radice spuria con residuo a precisione di macchina --
     cioe' un successo "silenzioso" nel senso del criterio di arresto di
-    ``fsolve``, ma un risultato fisicamente sbagliato (errori relativi
-    osservati fino al 200% su ``B``, col segno invertito). Un tentativo di
+    ``fsolve``, ma un risultato fisicamente sbagliato. Un tentativo di
     costruire un guess automatico risolvendo la forma chiusa dello Step 4
-    (caso ``mdot=0``) NON risolve il problema: converge anch'esso in modo
-    incoerente sulla radice giusta o sbagliata a seconda del caso, perche'
-    il problema non e' "quanto e' vicino il guess" ma "in quale bacino di
-    attrazione (segno di B) si parte" -- informazione che una formula
-    chiusa approssimata non puo' fornire in generale senza gia' conoscere
-    la risposta.
+    (caso ``mdot=0``, ORA NON PIU' DISPONIBILE dopo la correzione del
+    Ciclo 7) non risolveva comunque il problema: il problema non e' "quanto
+    e' vicino il guess" ma "in quale bacino di attrazione (segno di B) si
+    parte" -- informazione che una formula chiusa approssimata non puo'
+    fornire in generale senza gia' conoscere la risposta.
 
     Perche' A0, B0 sono OBBLIGATORI (nessun default, nessun calcolo
     automatico)
@@ -388,9 +544,6 @@ def risolvi_coefficienti_tangente_lineare(
     mdot : float
         Portata massica, kg/s (puo' essere 0.0, vedi test companion non
         circolare).
-    g_costante : float
-        Accelerazione di gravita' costante per l'integrazione, m/s^2
-        (stesso significato di ``integra_tangente_lineare``).
     tf : float
         Istante finale FISSO, s (non un'incognita di questo problema,
         coerente con lo scope gia' stabilito allo Step 4).
@@ -427,7 +580,7 @@ def risolvi_coefficienti_tangente_lineare(
         soluzione, info, ier, messaggio = fsolve(
             _residuo_velocita_finale,
             x0=guess,
-            args=(m0, spinta, mdot, g_costante, tf, vx_target, vh_target, x0, h0, vx0, vh0),
+            args=(m0, spinta, mdot, tf, vx_target, vh_target, x0, h0, vx0, vh0),
             full_output=True,
         )
         residuo_max = float(np.max(np.abs(info["fvec"])))
