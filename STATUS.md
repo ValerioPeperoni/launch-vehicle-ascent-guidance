@@ -4,12 +4,44 @@
 - [x] Step 1: Setup ambiente, modello atmosferico esponenziale, costanti fisiche
 - [x] Step 2: Dinamica a punto materiale (spinta, gravita', drag) — singolo stadio, ascesa verticale pura, senza guida (caso di test piu' semplice)
 - [x] Step 3: Gravity turn (fase atmosferica)
-- [ ] Step 4: Guida a tangente lineare (fase esoatmosferica) — verifica contro derivazione analitica nota
-- [ ] Step 5: Multistadio (eventi di staging, cambio massa discontinuo)
-- [ ] Step 6: Caso di validazione con dati reali di un lanciatore pubblico + confronto delta-v vs benchmark ~9.1-10.0 km/s
-- [ ] Step 7: Visualizzazione (traiettoria numerica + animazione)
-- [ ] Step 8: Validazione e documentazione dei limiti (VALIDATION.md, confronto concettuale con i progetti di riferimento)
-- [ ] Step 9: Pulizia, documentazione, README, preparazione per GitHub
+- [x] Step 4: Guida a tangente lineare (fase esoatmosferica) — verifica contro derivazione analitica nota
+- [x] Step 5: Multistadio, fase atmosferica (eventi di staging, cambio massa discontinuo — scope deciso 2026-08-16: solo verticale/gravity turn, non tangente lineare, vedi Step 7 sotto)
+- [x] Step 6: Guida a tangente lineare — problema inverso (root-finding
+  A/B per un target di velocita' terminale, deplezione di massa reale)
+  — **inserito 2026-08-16**, scorporato da quello che era lo Step 6
+  originale (vedi nota sotto), perche' la validazione con dati reali non
+  puo' produrre una traiettoria completa senza prima saper risolvere A/B
+  per un target. Root-finding via shooting (scipy.optimize), nessuna
+  forma chiusa disponibile con mdot reale (a differenza del caso
+  mdot=0 gia' verificato allo Step 4).
+- [ ] Step 7: Caso di validazione con dati reali di un lanciatore pubblico + confronto delta-v vs benchmark ~9.1-10.0 km/s
+  - **Nota dell'utente (2026-08-16, ORA RISOLTA — vedi nuovo Step 6
+    sopra):** lo Step 4 ha implementato la tangente lineare con A/B DATI
+    (integra, non risolve). Questo step (ex-Step 6) richiede il problema
+    INVERSO, ora scorporato nel nuovo Step 6 dedicato — qui si riusa il
+    risolutore del nuovo Step 6, non lo si reimplementa.
+- [ ] Step 8: Estensione — staging durante la fase di guida a tangente
+  lineare (aggiunto 2026-08-16, NON opzionale per il progetto finale,
+  solo rimandato nell'ordine — vedi decisione utente nel Ciclo 5).
+  Root-finding di A/B per segmento (si appoggia al problema inverso, ora
+  Step 6) + verifica di continuita' di stato tra uno stadio e il
+  successivo quando lo staging avviene a meta' della fase esoatmosferica
+  (i coefficienti A/B del segmento in corso non sono piu' validi dopo un
+  cambio discontinuo di massa/spinta, vanno ricalcolati per il nuovo
+  segmento).
+  - **Nota dell'utente (2026-08-16, da NON riscoprire da capo):** lo
+    Step 6 ha trovato che il problema inverso A/B ha radici multiple/
+    spurie per un singolo segmento (vedi Ciclo 6, addendum). Con più
+    segmenti concatenati con continuita' tra loro (staging a metà della
+    fase esoatmosferica), è molto probabile che lo stesso fenomeno si
+    ripresenti, probabilmente amplificato (più incognite, più bacini di
+    attrazione possibili). Il safeguard costruito allo Step 6 (due guess
+    vicini che devono concordare, altrimenti RuntimeError esplicito) è
+    probabilmente riusabile qui, non da reinventare — verificarlo
+    esplicitamente prima di progettare un meccanismo nuovo da zero.
+- [ ] Step 9: Visualizzazione (traiettoria numerica + animazione)
+- [ ] Step 10: Validazione e documentazione dei limiti (VALIDATION.md, confronto concettuale con i progetti di riferimento)
+- [ ] Step 11: Pulizia, documentazione, README, preparazione per GitHub
 
 ## Log cicli
 (ogni ciclo aggiunge una riga qui: data, step completato, note)
@@ -1021,3 +1053,863 @@ questo piano + addendum. Al termine, aggiornare STATUS.md con l'esito
 
 **Step 3: COMPLETATO.** Prossimo step proposto: Step 4 (guida a tangente
 lineare, fase esoatmosferica).
+
+---
+
+### 2026-08-16 — Ciclo 4 (piano scritto direttamente dall'orchestratore, non dal planner)
+
+**Nota di processo:** questo ciclo salta l'invocazione del sub-agente
+`planner` (e, a fine ciclo, anche `optimizer`/`reporter`) — pipeline
+snellita per evitare gli stalli di sessione gia' incontrati nel progetto
+del collasso stellare su uno step altrettanto delicato (vedi memoria
+`feedback_streamlined_pipeline.md`). Il rigore richiesto NON e' ridotto:
+`reviewer` e `critic-ingegnere` restano entrambi invocati, ciascuno con
+l'obbligo di ricalcolo numerico esplicito dei coefficienti A/B (vedi sotto),
+non un giudizio a occhio.
+
+**Step:** 4 — Guida a tangente lineare (fase esoatmosferica).
+
+#### 1. Derivazione (propria, nessun accesso web disponibile ai sub-agenti)
+
+Problema di controllo ottimo: minimizzare il tempo per raggiungere una
+velocita' terminale (vx_f, vh_f) assegnata, con modulo di spinta costante,
+nessun drag (fase esoatmosferica), gravita' **linearizzata a valore
+costante** sull'arco di manovra (approssimazione intrinseca alla tecnica
+stessa, non una scorciatoia aggiuntiva — e' esattamente cio' che rende il
+risultato "lineare" invece che accoppiato a g(h) variabile).
+
+Stato per il principio del massimo di Pontryagin: posizione (x,h) e
+velocita' (vx,vh). Hamiltoniano H = 1 + λx·vx + λh·vh + λvx·a(t)cosθ +
+λvh·(a(t)sinθ - g), con a(t) = spinta/m(t).
+
+Equazioni dei costati: dλx/dt = dλh/dt = 0 (λx, λh costanti);
+dλvx/dt = -λx (costante) → λvx(t) lineare in t; dλvh/dt = -λh (costante) →
+λvh(t) lineare in t. Il controllo ottimo massimizza λvx·cosθ + λvh·sinθ,
+quindi (cosθ,sinθ) parallelo a (λvx(t), λvh(t)): tanθ(t) = λvh(t)/λvx(t).
+
+Scegliendo il sistema di riferimento in modo che λx=0 (asse orizzontale
+lungo cui la posizione finale e' libera — scelta standard nella
+derivazione classica, qui e nella letteratura PEG/Perkins), λvx(t) resta
+COSTANTE e λvh(t) resta LINEARE in t, dando esattamente:
+
+```
+tan(theta(t)) = A + B*t
+```
+
+con A = λvh(0)/λvx e B = -λh/λvx, due costanti libere determinate dalle
+condizioni al contorno sulla velocita' finale. **Fonte della tecnica:**
+Perkins, F.M., "Derivation of Linear-Tangent Steering Laws" (citata in
+CLAUDE.md) — derivazione qui rifatta da principi primi (calcolo delle
+variazioni/Pontryagin), non riprodotta letteralmente dal testo originale
+(nessun accesso web disponibile ai sub-agenti, stesso limite gia' gestito
+per Culler & Fried allo Step 3).
+
+**Convenzione dell'angolo:** θ e' l'angolo della SPINTA rispetto
+all'orizzontale locale, in un riferimento CARTESIANO fisso (non relativo
+alla velocita'). Questo e' concettualmente diverso da γ dello Step 3
+(gravity turn), che era l'angolo della VELOCITA' rispetto all'orizzonte,
+con spinta vincolata ad essere allineata alla velocita' stessa (angolo di
+attacco nullo). Qui, al contrario, la spinta puo' NON essere allineata
+alla velocita' — e' guida attiva vera, non piu' un vincolo di assetto.
+
+#### 2. Confine di questo step (scope deciso esplicitamente)
+
+Questo step implementa e verifica la LEGGE di guida (la dinamica sotto
+tan(theta)=A+B*t con A,B DATI/noti), non la soluzione del problema al
+contorno generale (trovare A,B per centrare un target orbitale reale — in
+letteratura PEG questo e' tipicamente un problema accoppiato risolto per
+iterazione/shooting, dato che con deplezione di massa reale l'accelerazione
+a(t) non e' costante e l'integrale non ha piu' forma chiusa). Trovare A,B
+per un target di missione reale resta esplicitamente FUORI SCOPE qui
+(rimandato a quando servira' davvero, Step 5/6) — stessa disciplina di
+scope gia' applicata allo Step 3 (nessuna anticipazione della logica di
+transizione). Questo riduce il rischio di dover fare debug di un
+root-finder in questo ciclo, coerente con l'obiettivo di ridurre round di
+verifica per uno step gia' delicato di suo.
+
+#### 3. Equazioni implementate
+
+Stato `y = [x, h, vx, vh, m]` (cartesiano, non polare — qui non serve
+ricostruire l'angolo della velocita', il controllo θ(t) e' gia' una
+funzione esplicita ed elementare di t):
+
+```
+dx/dt  = vx
+dh/dt  = vh
+dvx/dt = (spinta/m) * cos(theta(t))
+dvh/dt = (spinta/m) * sin(theta(t)) - g_costante
+dm/dt  = -mdot
+```
+
+con `theta(t) = arctan(A + B*t)`, `g_costante` un parametro passato
+esplicitamente (valutato una volta, es. con
+`gravita.accelerazione_gravita(h_iniziale_fase)`, riusata per coerenza ma
+NON richiamata dentro l'integrazione ad ogni passo — la costanza di g e'
+l'approssimazione dichiarata di questa tecnica, vedi punto 1). Nessun
+riuso diretto di `guida.derivate_stato_gravity_turn` (fisica diversa: la'
+spinta e velocita' sono vincolate allineate, qui no) — nuova funzione,
+stesso principio gia' seguito allo Step 3 per non riusare equazioni
+fisicamente diverse solo per "risparmiare" una funzione.
+
+#### 4. Caso di test numerico per il confronto A/B (OBBLIGATORIO,
+richiesto esplicitamente dall'utente)
+
+Con `mdot = 0` (nessuna deplezione di massa: caso limite scelto apposta
+perche' rende `a(t) = spinta/m0` ESATTAMENTE costante, quindi l'integrale
+ha forma chiusa esatta — non un'approssimazione), gli integrali di
+`cos(theta(t))` e `sin(theta(t))` con `theta(t)=arctan(A+Bt)` si risolvono
+esattamente:
+
+```
+vx(tf) - vx0 = (a0/B) * [asinh(A+B*tf) - asinh(A)]
+vh(tf) - vh0 = (a0/B) * [sqrt(1+(A+B*tf)^2) - sqrt(1+A^2)] - g*tf
+```
+
+(con `a0 = spinta/m0` costante). Questa e' matematica pura (integrale di
+1/sqrt(1+u^2) e u/sqrt(1+u^2)), non richiede fonte esterna — verificabile
+da chiunque con carta e penna/calcolatrice, stesso principio dei check di
+conservazione dello Step 3.
+
+**Valori di test proposti** (marcare `# PROVVISORIO` in
+tests/test_guida_esoatmosferica.py, come i parametri veicolo degli step
+precedenti):
+- `A = 0.3`, `B = -0.002 (1/s)`, `tf = 20 s`
+- `m0 = 1000 kg`, `spinta = 40000 N` → `a0 = 40 m/s^2`
+- `g_costante = G0 = 9.80665 m/s^2` (riuso della costante di progetto)
+- `vx0 = vh0 = 0`, `x0 = h0 = 0`
+
+**Valori CORRETTI (vedi addendum reviewer punto 8 sotto — il calcolo a mano
+originale dell'orchestratore aveva un errore di arrotondamento amplificato
+da cancellazione catastrofica, corretto qui, confermato indipendentemente
+sia dal reviewer sia da me con `numpy.arcsinh`/`numpy.sqrt` a piena
+precisione):**
+- `asinh(0.3) = 0.2956730475634224`, `asinh(0.26) = 0.2571563485130149`
+  (dove `0.26 = A+B*tf`)
+  → `vx(tf) = (40/-0.002)*(0.2571563485130149-0.2956730475634224)
+  = 770.33398100815 m/s` (NON 770.5 come da primo calcolo a mano, errore
+  dovuto a cancellazione catastrofica nella sottrazione di due asinh
+  vicini moltiplicata per il fattore grande a0/B=-20000 — vedi addendum)
+- `sqrt(1+0.3^2) = 1.044030650891055`, `sqrt(1+0.26^2) = 1.0332473082471592`
+  → `vh(tf) = (40/-0.002)*(1.0332473082471592-1.044030650891055) -
+  9.80665*20 = 19.533852877918207 m/s`
+
+**IMPORTANTE per il coder:** il test pytest (criterio 1) deve calcolare la
+formula chiusa con `numpy.arcsinh`/`numpy.sqrt` IN CODICE al momento del
+test, MAI hardcodare questi valori decimali arrotondati come target di
+`pytest.approx` — la cancellazione catastrofica appena dimostrata prova che
+valori scritti a mano con poche cifre non sono affidabili come "verita'"
+hardcoded in un assert.
+
+**Tolleranza richiesta per il confronto:** il valore calcolato dalla
+formula chiusa deve coincidere con l'output di `solve_ivp` (integrazione
+numerica della stessa dinamica con `mdot=0`) entro la tolleranza
+dell'integratore stesso (es. `rtol=1e-8` usato per l'integrazione,
+confronto con `pytest.approx(..., rel=1e-6)` per margine di accumulo,
+stesso principio gia' giudicato adeguato dal critic-ingegnere allo
+Step 3) — NON una tolleranza fisica allargata.
+
+**Verifica di plausibilita' fisica del caso di test (fatta da me, per
+trasparenza):** con questi parametri `dvh/dt` resta positivo per tutta la
+durata (parte da `40*sin(16.7°)-9.80665 ≈ 1.68 > 0` e si riduce
+gradualmente restando positivo fino a `t=tf`), quindi `h(t)` e' monotona
+crescente per l'intero test — nessuna sorpresa di segno da investigare.
+
+#### 5. Struttura dei file
+
+```
+lanciatore/
+└── guida_esoatmosferica.py   # derivate_stato_tangente_lineare(t, y, A, B,
+                               #   spinta, mdot, g_costante) — equazioni punto 3
+                               # integra_tangente_lineare(m0, spinta, mdot, A, B,
+                               #   g_costante, tf, x0=0, h0=0, vx0=0, vh0=0)
+                               #   — solve_ivp su [0, tf], nessun evento
+                               #   terminale (tf fisso, nessuno staging/
+                               #   terminazione anticipata in questo step,
+                               #   coerente col confine del punto 2)
+
+tests/
+└── test_guida_esoatmosferica.py   # criteri al punto 6
+```
+
+Nessuna modifica a `costanti.py`/`atmosfera.py`/`gravita.py`/`dinamica.py`/
+`guida.py` (tutti riusati dove pertinente, non alterati).
+
+#### 6. Criteri di verifica (`tests/test_guida_esoatmosferica.py`)
+
+1. **Confronto A/B in forma chiusa (il check centrale, vedi punto 4):**
+   con `mdot=0` e i parametri di test, `vx(tf)` e `vh(tf)` calcolati da
+   `integra_tangente_lineare` devono coincidere con le formule chiuse
+   entro la tolleranza dichiarata.
+2. **Identita' algebrica diretta:** valutando
+   `derivate_stato_tangente_lineare` a un istante/stato arbitrario,
+   `dvx/dt` e `dvh/dt` restituiti devono coincidere ESATTAMENTE con
+   `(spinta/m)*cos(arctan(A+Bt))` e `(spinta/m)*sin(arctan(A+Bt))-g`
+   (stesso stile del criterio 7 dello Step 3, verifica diretta della
+   formula indipendente dall'integrazione).
+3. **Monotonia di h(t) nel caso di test nominale:** verificata
+   puntualmente sulla soluzione (conseguenza attesa, vedi punto 4 —
+   se fallisse sarebbe un errore nei parametri di test o nell'
+   implementazione, da investigare, non da nascondere).
+4. **Nessun NaN/inf** su tutta la traiettoria.
+5. **Massa costante quando mdot=0:** `m(t) == m0` per tutta la traiettoria
+   nel caso di test (verifica banale ma diretta che `mdot=0` sia rispettato
+   e non ci sia un bug che fa decrescere la massa comunque).
+6. **Caso con mdot≠0 (sanity, non hand-check):** con parametri di
+   deplezione realistici (es. isp=300s coerente con G0, spinta/isp→mdot
+   come negli step precedenti), nessun NaN/inf, massa decrescente
+   correttamente — solo un controllo di non-patologia, il confronto
+   analitico esatto resta il caso `mdot=0` del criterio 1 (la forma chiusa
+   non vale quando la massa depleta davvero, come dichiarato al punto 2).
+   **Protezione obbligatoria (addendum reviewer punto 8):** verificare
+   ESPLICITAMENTE a monte, con un commento nel test, che `mdot*tf` resti
+   ben al di sotto di `m0` per i parametri scelti (margine ampio, es.
+   `mdot*tf < 0.5*m0`), cosi' che `spinta/m` non rischi mai una
+   singolarita' durante l'integrazione a `tf` fisso — coerente col pattern
+   gia' stabilito negli Step 2/3 (eventi/controlli difensivi su massa),
+   qui realizzato come vincolo verificato sui parametri di test invece di
+   un evento terminale (accettabile perche' `tf` e' fisso e breve in
+   questo scenario di sanity check, non una traiettoria completa fino a
+   fine propellente).
+
+Nessun confronto con il benchmark delta-v 9.1-10.0 km/s in questo step
+(riservato allo Step 6). Nessuna soluzione del problema A/B-per-target
+(riservato a quando servira', vedi punto 2).
+
+#### 7. Nota per reviewer e critic-ingegnere (requisito esplicito
+dell'utente, non facoltativo)
+
+Ricalcolare autonomamente, con carta/calcolatrice, `vx(tf)` e `vh(tf)`
+dalle formule chiuse del punto 4 usando gli stessi valori numerici, e
+riportare per iscritto in STATUS.md i propri numeri calcolati e il
+confronto con l'output effettivo del codice (non solo "ho controllato la
+formula e sembra giusta"). Il critic-ingegnere lo fa indipendentemente dal
+reviewer (sul codice implementato, non sul piano) — se i due calcoli
+indipendenti (reviewer sul piano, critic-ingegnere sul codice) non
+coincidono tra loro entro la tolleranza dichiarata, e' un segnale da
+investigare subito, non da far passare silenziosamente.
+
+#### 8. Addendum (reviewer) — recepito prima di passare al coder
+
+Verdetto reviewer: **approvabile con modifiche minori**. Il reviewer ha
+eseguito il ricalcolo numerico obbligatorio (a mano, con serie di Taylor +
+logaritmo come doppio controllo incrociato) e ha trovato un errore reale
+nel calcolo a mano dell'orchestratore: `vx(tf)` era riportato come 770.5
+m/s ma il valore corretto e' 770.33 m/s (scarto relativo ~2.2e-4, sopra la
+tolleranza 1e-4 richiesta), causato da cancellazione catastrofica nella
+sottrazione di due `asinh` vicini moltiplicata per il fattore grande
+`a0/B=-20000`. **Confermato indipendentemente anche da me (orchestratore)
+con `numpy.arcsinh`/`numpy.sqrt` a piena precisione** (vedi valori corretti
+gia' sostituiti al punto 4 sopra: vx(tf)=770.33398 m/s,
+vh(tf)=19.53385 m/s). Modifiche recepite:
+
+1. **Valori numerici corretti** al punto 4 (fatto, vedi sopra) — e nota
+   esplicita per il coder che il test deve calcolare la formula chiusa in
+   codice con numpy, mai hardcodare cifre arrotondate a mano come target.
+2. **Protezione mancante per il criterio 6 (mdot≠0)** — colmata al punto 6
+   sopra (verifica esplicita `mdot*tf << m0` nei parametri di test).
+3. **Completare la derivazione teorica nella docstring del codice** (non
+   solo qui in STATUS.md): (a) chiarire che `λx=0` segue dalla condizione
+   di trasversalita' per posizione finale `x_f` LIBERA (non vincolata),
+   non da una generica "scelta di sistema di riferimento" — e' una
+   conseguenza del problema al contorno, non una scelta arbitraria di
+   assi; (b) rendere esplicito che, per lo stesso ragionamento, se anche
+   `h_f` fosse libera si avrebbe `λh≡0` e quindi `B=0`, collassando la
+   legge a un angolo costante — la tangente lineare vera (B≠0) richiede
+   quindi che la quota finale `h_f` sia VINCOLATA (target di iniezione
+   orbitale specificato), mentre la distanza a terra `x_f` resta libera.
+   Questa asimmetria (x_f libera, h_f fissata) e' l'assunzione che rende
+   la derivazione autoconsistente e va scritta esplicitamente nella
+   docstring di `guida_esoatmosferica.py`, non lasciata implicita.
+
+Punto verificato senza problemi dal reviewer: convenzione dell'angolo
+theta chiara; nota aggiuntiva (non blocca nulla, da menzionare in
+docstring): `arctan(A+Bt)` restituisce sempre valori in (-90°,90°), quindi
+la parametrizzazione impone implicitamente spinta sempre con componente
+orizzontale non negativa (mai spinta "all'indietro") — ragionevole per
+iniezione orbitale, ma e' un vincolo implicito della parametrizzazione da
+rendere esplicito in un commento.
+
+**Prossimo:** passare al sub-agente coder per l'implementazione secondo
+questo piano + addendum.
+
+#### 9. Esito ciclo (coder + critic-ingegnere, pipeline snellita — vedi nota di processo in testa a questo ciclo; pulizia e chiusura fatte direttamente dall'orchestratore)
+
+- **coder**: implementati `lanciatore/guida_esoatmosferica.py`
+  (derivate_stato_tangente_lineare, integra_tangente_lineare, con
+  derivazione Pontryagin/costati completa nel docstring incluso
+  l'addendum del reviewer) e `tests/test_guida_esoatmosferica.py` (6
+  criteri, forma chiusa calcolata in codice con numpy, mai hardcodata).
+  Nessuna modifica ai 5 moduli riusati (diff vuoto confermato). 38/38 test
+  verdi (32+6). Criterio 1: vx(tf)=770.3339810076213 vs atteso
+  770.33398100815 (scarto ~6.9e-13); vh(tf)=19.53385287791232 vs atteso
+  19.533852877918207 (scarto ~3.0e-13) — ben entro rel=1e-6. Nessuna
+  ambiguita' residua.
+- **critic-ingegnere**: ricalcolo numerico INDIPENDENTE (dal reviewer, sul
+  codice implementato, non sul piano) di vx(tf)/vh(tf) — coincidenza
+  esatta con i valori del reviewer e con l'output del codice, nessuna
+  discrepanza tra i due calcoli indipendenti. Vincolo "Guida, fase
+  esoatmosferica: tangente lineare, rif. Perkins" **verificato** — fonte
+  citata, derivazione completa incluse entrambe le parti dell'addendum
+  (trasversalita' λx=0, necessita' di h_f vincolata per B≠0). Protezione
+  mdot*tf<0.5*m0 del criterio 6 verificata (271.9 kg < 500 kg, margine
+  ampio). pytest rieseguito in modo indipendente (38 passed). File
+  riusati confermati non modificati via git diff. Nessuna violazione.
+- **Pulizia (io, non optimizer):** codice e test riletti, gia' puliti e
+  ben organizzati (docstring esplicative, nessuna ridondanza tra i 6
+  test) — nessuna correzione necessaria, coerente con l'esito frequente
+  dell'optimizer negli step precedenti.
+
+**Step 4: COMPLETATO.** Questo era lo step piu' delicato del progetto
+(coefficienti A/B della tangente lineare): la verifica rafforzata
+richiesta esplicitamente dall'utente (doppio ricalcolo numerico
+indipendente, reviewer sul piano e critic-ingegnere sul codice) ha
+effettivamente trovato e corretto un errore reale (cancellazione
+catastrofica nel primo calcolo a mano dell'orchestratore, 770.5 invece di
+770.33 m/s) prima che arrivasse al codice. Prossimo step proposto: Step 5
+(multistadio, eventi di staging).
+
+---
+
+### 2026-08-16 — Ciclo 5 (piano scritto direttamente dall'orchestratore)
+
+**Nota di processo:** pipeline snellita confermata (vedi memoria
+`feedback_streamlined_pipeline.md`): scrivo io il piano, salto
+`planner`/`optimizer`/`reporter`, mantengo `reviewer` e `critic-ingegnere`
+come chiamate sub-agente vere.
+
+**Step:** 5 — Multistadio, fase atmosferica (eventi di staging, cambio
+massa discontinuo).
+
+**Decisione dell'utente sullo scope (2026-08-16, non riaprire in questo
+ciclo):** lo staging qui riguarda SOLO la fase atmosferica (verticale +
+gravity turn, Step 2/3), non la tangente lineare (Step 4) — quella
+estensione e' stata esplicitamente aggiunta come nuovo Step 7 in
+STATUS.md (non opzionale, solo rimandata), perche' un cambio di massa a
+meta' della fase B renderebbe i coefficienti A/B del segmento in corso
+invalidi, e ricalcolarli e' accoppiato al problema inverso gia' rimandato
+allo Step 6. Implementato pero' come meccanismo GENERICO e riusabile,
+cosi' la stessa struttura serve anche allo Step 7 quando ci si arrivera'.
+
+#### 1. Design tecnico
+
+**Rappresentazione di uno stadio:** dict con `m_prop` (kg, propellente),
+`m_strut` (kg, massa strutturale espulsa al burnout), `spinta` (N), `isp`
+(s). Nessuna massa "payload" esplicita — implicita in `m0` totale meno
+tutto cio' che verra' bruciato/espulso.
+
+**Riuso massimo (nessuna reimplementazione della fisica):**
+- Stadio 1: riusa **direttamente e senza modifiche**
+  `guida.integra_gravity_turn` (Fase A verticale + kick + Fase B gravity
+  turn, Step 3), passando come `m_vuoto` la soglia di burnout DI QUESTO
+  STADIO (`m0 - m_prop_1`, non la massa a vuoto finale del razzo — la
+  funzione non ha bisogno di sapere che ci sono altri stadi attaccati).
+- Stadi 2..N: riusano **direttamente**
+  `guida.derivate_stato_gravity_turn` e i suoi eventi difensivi
+  (`evento_impatto_suolo_2d`, `evento_traiettoria_invalida`,
+  `evento_velocita_minima`), con un nuovo `evento_fine_propellente_2d`
+  parametrizzato via `functools.partial` (stesso pattern gia' stabilito
+  allo Step 3) sulla soglia di burnout di QUEL segmento.
+- **Nessuna modifica a `guida.py`** (diff vuoto da verificare, come per
+  ogni step precedente).
+
+**Discontinuita' allo staging:** al burnout dello stadio i, `x, h, v,
+gamma` restano ESATTAMENTE continui (solo la massa cambia); la massa
+scende istantaneamente di `m_strut_i` PRIMA di iniziare l'integrazione
+dello stadio i+1. Anche dopo l'ultimo stadio l'espulsione della struttura
+avviene (fisicamente reale), semplicemente non c'e' integrazione
+successiva.
+
+**Nuovo modulo:** `lanciatore/staging.py`, funzione
+`integra_multistadio_gravity_turn(stadi, v_kick, kick_angle_deg, h0=0.0,
+t_max=1000.0, v_min=1.0)`: orchestratore che chiama
+`guida.integra_gravity_turn` per lo stadio 1, poi itera sugli successivi
+con `solve_ivp` diretto (dinamica + eventi riusati da `guida.py`),
+applicando la discontinuita' di massa tra un segmento e il successivo.
+Ritorna la lista di tutti i risultati grezzi di `solve_ivp` (nessun
+risultato nascosto) piu' un riepilogo (masse/istanti di ogni evento di
+staging).
+
+#### 2. Struttura dei file
+
+```
+lanciatore/
+└── staging.py   # integra_multistadio_gravity_turn(...)
+
+tests/
+└── test_staging.py   # criteri al punto 3
+```
+
+Nessuna modifica a `costanti.py`/`atmosfera.py`/`gravita.py`/
+`dinamica.py`/`guida.py`/`guida_esoatmosferica.py`.
+
+#### 3. Criteri di verifica (`tests/test_staging.py`)
+
+1. **Continuita' di stato allo staging:** `x,h,v,gamma` identici (entro
+   tolleranza numerica dell'integratore) tra l'ultimo punto dello stadio
+   i e il primo punto dello stadio i+1; la massa deve differire
+   ESATTAMENTE di `m_strut_i` (assegnazione diretta, test esatto, non
+   approssimato).
+2. **Budget di massa rispettato:** propellente bruciato + strutture
+   espulse + massa finale rimanente deve tornare esattamente a `m0` —
+   controllo di contabilita' indipendente dalla fisica del moto.
+3. **Confronto con Tsiolkovsky per-stadio (caso limite analitico, stesso
+   principio dei check di conservazione di Step 2/3/4):** il delta-v
+   ideale totale (nessuna gravita'/drag) e' la SOMMA dei delta-v ideali
+   di ciascuno stadio, `Isp_i*G0*ln(m_ignizione_i/m_burnout_i)` —
+   identita' puramente algebrica sulle masse/Isp, verificabile a mano,
+   nessuna fonte esterna necessaria. Verificare che questa somma sia
+   calcolabile e che la velocita' finale INTEGRATA (con gravita'/drag
+   reali) resti strettamente minore di questo limite superiore (stesso
+   pattern del criterio Tsiolkovsky di Step 2).
+4. **Ogni evento di burnout e' "fine propellente", non un evento
+   difensivo:** con parametri di test ragionevoli, nessuno stadio deve
+   fermarsi per impatto suolo/traiettoria invalida/velocita' minima — se
+   succede e' un segnale da investigare, non da ignorare.
+5. **Nessun NaN/inf** su tutta la traiettoria multistadio concatenata.
+6. Parametri di test (2 stadi, valori plausibili) marcati
+   `# PROVVISORIO`, riusando dove sensato i valori gia' usati per lo
+   stadio 1 negli Step 2/3 (m0=50000, m_prop_1=45000 con m_strut_1 da
+   dedurre, spinta_1=800000N, isp_1=300s; stadio 2 con massa/spinta
+   ridotte in proporzione plausibile per uno stadio superiore).
+
+Nessun confronto con il benchmark delta-v 9.1-10.0 km/s in questo step
+(riservato al nuovo Step 6, dati reali). Nessuna soluzione del problema
+A/B-per-target (fuori scope, deciso allo Step 4; riguarda comunque
+tangente lineare, non pertinente qui).
+
+**Prossimo:** passare al sub-agente reviewer per il controllo critico di
+questo piano, poi al coder.
+
+#### 4. Addendum (reviewer) — recepito prima di passare al coder
+
+Verdetto reviewer: **da rivedere** (non solo modifiche minori — mancavano
+parametri necessari alla firma). Modifiche recepite:
+
+1. **`m0` (massa totale iniziale) mancante — aggiunto.** Nuova firma:
+   `integra_multistadio_gravity_turn(m0, stadi, cd, area, v_kick,
+   kick_angle_deg, h0=0.0, t_max=1000.0, v_min=1.0)`. `m0` e' la massa
+   totale allo stacco (tutti gli stadi + payload implicito). Lo stadio 1
+   riusa `guida.integra_gravity_turn(m0, m_vuoto=m0-m_prop_1, ...)`.
+2. **`cd`/`area` mancanti — aggiunti come parametri GLOBALI** della
+   funzione (non per-stadio): decisione di design esplicita, coerente con
+   la semplificazione "Cd costante" gia' dichiarata a livello di progetto
+   in CLAUDE.md (un solo Cd/area per l'intera simulazione, non solo per
+   singolo stadio) — differenze aerodinamiche tra stadi (es. sgancio
+   ogiva) sono un ulteriore raffinamento esplicitamente rimandato, non
+   richiesto da questo step. Riusano `CD` da `costanti.py` e l'`area` gia'
+   usata negli Step 2/3 (diametro 3.0 m).
+3. **Massa di base per la sottrazione di `m_strut_i`: e' lo STATO
+   EFFETTIVO, non il valore nominale.** Stesso principio gia' stabilito
+   nell'addendum Step 3 punto 4 (v0 preso dallo stato effettivo
+   dell'evento, non dal parametro nominale): la massa da cui sottrarre
+   `m_strut_i` e' `risultato_stadio_i.y[4, -1]` (il valore che
+   `solve_ivp` restituisce ESATTAMENTE all'evento terminale, entro la
+   tolleranza del root-finder di `solve_ivp`), non il parametro nominale
+   `m_vuoto_i` calcolato a monte. `x, h, v, gamma` sono presi dalla
+   stessa fonte (stato effettivo), coerenza totale nella provenienza dei
+   dati di continuita'.
+4. **Nuovo criterio di verifica (analogo al criterio 1 dello Step 2):**
+   la massa EFFETTIVA all'evento di fine-propellente dello stadio i deve
+   coincidere con la soglia nominale `m_vuoto_i` entro l'`atol`
+   dell'integratore (`pytest.approx` con tolleranza coerente) — questo e'
+   il controllo che intercetta un eventuale disallineamento tra valore
+   nominale ed effettivo, mancante nella prima stesura del piano.
+5. **Tabella numerica esplicita per il caso di test a 2 stadi** (calcolata
+   e verificata algebricamente, T/W e tempi di bruciamento controllati
+   per plausibilita' fisica):
+
+| Grandezza | Stadio 1 | Stadio 2 |
+|---|---|---|
+| `m_prop` | 40 000 kg | 8 000 kg |
+| `m_strut` | 4 000 kg | 800 kg |
+| `spinta` | 800 000 N | 150 000 N |
+| `isp` | 300 s | 320 s |
+| `mdot` (derivata) | 271.924 kg/s | 47.799 kg/s |
+| `t_burn` (derivata) | ≈147.1 s | ≈167.4 s |
+| T/W a ignizione (derivata) | 1.511 | 1.530 |
+
+Masse di riferimento (derivate, da usare nei test):
+`m0 = 54000 kg` (payload implicito = 1200 kg, mai nominato come campo a
+se', solo cio' che resta a fine stadio 2); `m_vuoto_1 = m0 - m_prop_1 =
+14000 kg`; `m_ignizione_2 = m_vuoto_1 - m_strut_1 = 10000 kg`;
+`m_vuoto_2 = m_ignizione_2 - m_prop_2 = 2000 kg`; `m_finale = m_vuoto_2 -
+m_strut_2 = 1200 kg` (torna esattamente al payload, verifica di
+bookkeeping gia' fatta a mano). Delta-v ideali per-stadio (Tsiolkovsky,
+verificati algebricamente): `dv_ideale_1 ≈ 3971.478 m/s`, `dv_ideale_2 ≈
+5050.622 m/s`, somma ≈ `9022.100 m/s` (SOLO un limite superiore teorico
+per il confronto del criterio 3, NON un valore da raggiungere — nessun
+legame col benchmark 9.1-10.0 km/s dello Step 6, che e' un numero diverso
+per un contesto diverso, guidato e con orbita reale).
+6. **Criterio 2 (budget di massa) rietichettato esplicitamente come
+   sanity-check sui dati di INPUT** (vero per costruzione sui parametri
+   di progetto, non sulla simulazione) — il vero test sulla simulazione
+   e' il nuovo criterio 4 dell'addendum sopra (massa effettiva vs
+   nominale a ogni evento).
+7. **Nota per il critic-ingegnere (punto minore del reviewer):** con piu'
+   stadi, `gamma` puo' avvicinarsi alla soglia difensiva
+   `evento_traiettoria_invalida` (gamma<=0) in modo piu' pronunciato che
+   con un solo stadio — verificare nel caso di test nominale che questo
+   NON accada (coerente col criterio 4 gia' nel piano, "ogni evento di
+   burnout e' fine_propellente, non un evento difensivo").
+
+#### 5. Scoperta empirica del coder e correzione dei parametri di test
+(risultato inatteso investigato secondo la regola CLAUDE.md — NON
+un aggiustamento silenzioso di tolleranze)
+
+Con la tabella numerica dell'addendum punto 5 (stadio 2: m_prop=8000,
+m_strut=800), il coder ha implementato correttamente `staging.py` (diff
+vuoto sui moduli riusati, logica di continuita' conforme al piano), ma
+**2 test su 6 sono falliti**: lo stadio 2 si fermava per l'evento
+difensivo `evento_traiettoria_invalida` (gamma collassato a zero) invece
+che per `fine_propellente`, a t≈75.7s contro un tempo di bruciamento
+nominale atteso di ≈167.4s. Il coder ha correttamente RIFIUTATO di
+alterare le tolleranze o i parametri per far passare i test in silenzio,
+e ha segnalato il problema per decisione.
+
+**Causa fisica identificata (verificata numericamente da me,
+orchestratore):** l'equazione del gravity turn,
+`dgamma/dt = -(g(h)/v)*cos(gamma)`, NON dipende dalla spinta — l'angolo
+di rotta decresce monotonicamente verso zero col tempo per costruzione,
+a un tasso determinato solo da `g/v` e dall'angolo corrente, qualunque
+sia il livello di spinta dello stadio in corso. Concatenare due
+bruciamenti lunghi sotto la STESSA legge di guida non e' automaticamente
+valido: lo stadio 1 (147.1s di gravity turn) porta gamma gia' a ≈12° a
+fine bruciamento (v≈2899 m/s, h≈54.4 km); un secondo bruciamento di
+167.4s supplementari sotto la stessa legge fa collassare gamma sotto
+zero circa a meta' strada. Non e' un bug: e' esattamente il motivo per
+cui un lanciatore reale smette di usare il gravity turn ben prima di
+esaurire piu' stadi consecutivi sotto la stessa legge — coerente col
+fatto che il progetto passa a un'altra legge di guida (tangente lineare,
+Step 4) proprio per la fase successiva. Per QUESTO step (staging isolato
+dalla scelta di quando cambiare legge di guida, per scope esplicito) la
+tabella di test deve semplicemente restare entro la finestra in cui il
+gravity turn concatenato regge, senza introdurre alcuna logica di
+cambio-legge (fuori scope).
+
+**Ricerca numerica (fatta da me) di parametri stadio 2 auto-consistenti:**
+a spinta/isp fissati (150000 N, 320 s, stessi valori dell'addendum), ho
+cercato il valore di `m_prop_2` tale che il tempo di bruciamento nominale
+resti sotto la soglia di collasso di gamma, con margine di sicurezza
+(6500 kg regge fino a t=136.0s completando il nominale; 7000 kg fallisce
+a t=140.2s contro un nominale di 146.4s — il punto di rottura e' tra i
+due). **Scelto `m_prop_2 = 6000 kg`** (margine confortevole sotto 6500),
+`m_strut_2 = 600 kg` (stesso rapporto 10:1 di massa strutturale/propellente
+dello stadio 1).
+
+**Tabella numerica CORRETTA (sostituisce quella del punto 4.5
+dell'addendum, tutti i valori ricalcolati e verificati end-to-end con
+`integra_multistadio_gravity_turn` effettivamente eseguita, non solo
+algebra a parte):**
+
+| Grandezza | Stadio 1 | Stadio 2 |
+|---|---|---|
+| `m_prop` | 40 000 kg | **6 000 kg** |
+| `m_strut` | 4 000 kg | **600 kg** |
+| `spinta` | 800 000 N | 150 000 N |
+| `isp` | 300 s | 320 s |
+| `mdot` (derivata) | 271.924 kg/s | 47.799 kg/s |
+| `t_burn` nominale (derivata) | ≈147.1 s | ≈125.5 s |
+| T/W a ignizione (derivata) | 1.575 | 1.961 |
+
+`m0 = 51800 kg` (payload implicito = 1200 kg, invariato); `m_vuoto_1 =
+m0 - m_prop_1 = 11800 kg`; `m_ignizione_2 = m_vuoto_1 - m_strut_1 = 7800
+kg`; `m_vuoto_2 = m_ignizione_2 - m_prop_2 = 1800 kg`; `m_finale =
+m_vuoto_2 - m_strut_2 = 1200 kg` (= payload, bookkeeping verificato).
+Delta-v ideali per-stadio: `dv_ideale_1 ≈ 4352.066 m/s`, `dv_ideale_2 ≈
+4601.553 m/s`, somma ≈ `8953.619 m/s` (limite superiore teorico, non un
+target).
+
+**Verifica end-to-end eseguita da me con questi valori:** entrambi gli
+stadi terminano per `fine_propellente` (differenza massa
+effettiva/nominale = 0.0 in entrambi i casi, entro la precisione di
+macchina); stato finale: v≈7508.7 m/s, gamma≈8.10° (positivo, margine
+sano rispetto alla soglia difensiva), v_finale < somma ideale (8953.6
+m/s) come atteso dal criterio 3.
+
+**Azione per il coder:** aggiornare SOLO i valori numerici in
+`tests/test_staging.py` (m_prop_2, m_strut_2 e le masse derivate) secondo
+questa tabella corretta — nessuna modifica a `staging.py` (la logica era
+gia' corretta, il problema era solo nei parametri di test). Rieseguire
+`pytest` per confermare 6/6 verdi in `test_staging.py`.
+
+#### 6. Esito ciclo (coder x2 + critic-ingegnere, pipeline snellita —
+pulizia e chiusura fatte direttamente dall'orchestratore)
+
+- **coder (1° passaggio):** implementato `lanciatore/staging.py` e
+  `tests/test_staging.py` secondo il piano + addendum. Diff vuoto sui 6
+  moduli riusati confermato. 2 test su 6 falliti per un motivo fisico
+  reale (gamma collassato, vedi punto 5) — il coder ha correttamente
+  rifiutato di aggiustare tolleranze o parametri in silenzio e ha
+  segnalato il problema, esattamente come richiesto dalla regola di
+  lavoro CLAUDE.md sui risultati inattesi.
+- **Investigazione causa fisica (io, orchestratore):** confermata la
+  causa (dgamma/dt indipendente dalla spinta), trovata numericamente una
+  tabella di parametri auto-consistente con margine (m_prop_2=6000,
+  m_strut_2=600), verificata end-to-end prima di rimandare al coder.
+- **coder (2° passaggio):** aggiornati solo i numeri in
+  `tests/test_staging.py` secondo la tabella corretta, nessuna modifica a
+  `staging.py`. 44/44 test verdi. Segnalata (senza correggerla, come da
+  istruzione) un'incongruenza minore nella docstring di `staging.py`
+  (sezione "Solleva RuntimeError" residua da una versione precedente non
+  più valida) — corretta direttamente da me (edit di sola docstring,
+  nessuna modifica di logica).
+- **critic-ingegnere:** pytest rieseguito in modo indipendente (44
+  passed). Vincolo "Multistadio: eventi di staging come eventi terminali
+  ODE" **verificato**, implementazione pulita. Continuità di stato via
+  stato EFFETTIVO (non nominale) verificata riga per riga. Tsiolkovsky
+  per-stadio ricalcolato indipendentemente (coincidenza esatta). Ha
+  riprodotto autonomamente sia il caso di collasso con i parametri
+  originali (t=75.683s, coincide) sia il punto di rottura empirico
+  (6500kg regge, 7000kg no) sia il caso corretto finale — giudicata
+  genuina l'investigazione della causa fisica, non un numero scelto a
+  caso. Nessuna violazione.
+- **Pulizia (io, non optimizer):** codice e test riletti, già puliti,
+  nessuna correzione necessaria oltre al fix di docstring sopra.
+
+**Step 5: COMPLETATO.** Il ciclo ha prodotto un secondo esempio (dopo la
+cancellazione catastrofica dello Step 4) di un risultato inatteso
+genuinamente investigato invece che nascosto: qui la fisica del gravity
+turn (angolo che collassa indipendentemente dalla spinta) ha reso non
+validi i primi parametri di test scelti, e la correzione richiesta una
+ricerca numerica esplicita del punto di rottura, non un ritocco casuale.
+Prossimo step proposto: Step 6 (caso di validazione con dati reali +
+confronto delta-v vs benchmark 9.1-10.0 km/s).
+
+---
+
+### 2026-08-16 — Ciclo 6 (piano scritto direttamente dall'orchestratore)
+
+**Nota di processo:** pipeline snellita confermata: scrivo io il piano,
+salto `planner`/`optimizer`/`reporter`, mantengo `reviewer` e
+`critic-ingegnere` come chiamate sub-agente vere.
+
+**Riorganizzazione roadmap (fatta prima di questo piano, vedi sezione
+"## Step" in testa al file):** inserito nuovo Step 6 dedicato al problema
+inverso della tangente lineare, scorporandolo da quello che era lo Step
+6 "Caso di validazione" (ora Step 7) — coerente con la nota utente
+lasciata al Ciclo 4/5 ("il planner deve trattarlo come uno step a se
+stante quando ci si arriva"). Rinumerati a scendere anche Step 8
+(estensione staging in tangente lineare, gia' dipendeva dal problema
+inverso), 9 (visualizzazione), 10 (validazione/limiti), 11 (pulizia).
+
+**Step (nuovo numero):** 6 — Guida a tangente lineare, problema inverso
+(root-finding A/B per un target di velocita' terminale, deplezione di
+massa reale).
+
+#### 1. Design tecnico
+
+**Problema:** dati stato iniziale (x0,h0,vx0,vh0,m0), spinta, mdot,
+g_costante, tempo di volo `tf` FISSO (non un'incognita aggiuntiva,
+coerente con lo scope gia' stabilito allo Step 4), e una velocita'
+terminale desiderata (vx_target, vh_target), trovare A, B tali che
+integrando `guida_esoatmosferica.derivate_stato_tangente_lineare`
+(RIUSATA SENZA MODIFICHE) su [0,tf] si ottenga vx(tf)≈vx_target,
+vh(tf)≈vh_target.
+
+**Perche' serve root-finding:** con `mdot≠0` reale, `a(t)=spinta/m(t)`
+non e' costante, quindi la forma chiusa dello Step 4 (valida solo per
+`mdot=0`) non si applica — esattamente la ragione per cui lo Step 4 ha
+esplicitamente rimandato questo problema (vedi la sua docstring,
+"Confine di questo step").
+
+**Metodo:** `scipy.optimize.fsolve` su residuo
+`R(A,B) = (vx(tf;A,B)-vx_target, vh(tf;A,B)-vh_target)`, dove
+`vx(tf;A,B), vh(tf;A,B)` si ottengono chiamando
+`guida_esoatmosferica.integra_tangente_lineare` (RIUSATA SENZA
+MODIFICHE) con i valori correnti di A,B. Nessuna reimplementazione della
+dinamica.
+
+**Guess iniziale:** dalla formula chiusa dello Step 4 (caso limite
+mdot=0, `a0=spinta/m0`), punto di partenza fisicamente motivato invece
+di 0,0 arbitrario.
+
+**Fallimento esplicito:** se `fsolve` non converge (`ier != 1` o residuo
+finale sopra una tolleranza dichiarata), sollevare `RuntimeError`
+esplicito col residuo raggiunto — mai accettare silenziosamente una
+soluzione non convergente.
+
+**Nuova funzione, stesso modulo Step 4 (non un nuovo file):** aggiunta a
+`lanciatore/guida_esoatmosferica.py` (le due funzioni esistenti restano
+INVARIATE, solo aggiunta — stesso principio gia' usato per `CD` in
+`costanti.py` allo Step 2):
+`risolvi_coefficienti_tangente_lineare(m0, spinta, mdot, g_costante, tf,
+vx_target, vh_target, x0=0.0, h0=0.0, vx0=0.0, vh0=0.0, A0=None,
+B0=None)`.
+
+#### 2. Verifica (progettata per essere non tautologica)
+
+Una semplice verifica "risolvi per un target, poi integra e controlla
+che il residuo sia piccolo" rischia di essere tautologica (verifica solo
+il criterio di arresto del solver, non la correttezza). Test case
+progettato cosi':
+
+1. `A_vero=0.3`, `B_vero=-0.002` (stessi valori dello Step 4, per
+   continuita'), parametri con `mdot≠0` REALE: `spinta=40000N,
+   m0=1000kg, isp=300s` (→ `mdot≈13.61 kg/s`), `tf=20s` (margine di
+   massa ampio, gia' verificato allo Step 4 criterio 6).
+2. Integrazione AVANTI con A_vero,B_vero (via `integra_tangente_lineare`,
+   gia' verificata) per ottenere (vx_target, vh_target) — risultato
+   NUMERICO (non forma chiusa, non esiste con mdot≠0): il target e'
+   garantito raggiungibile per costruzione.
+3. Il solver parte da un guess iniziale DIVERSO dalla verita' (il guess
+   automatico dalla formula chiusa mdot=0, vicino ma non identico ad
+   A_vero/B_vero perche' ignora la deplezione di massa).
+4. **Verifica non tautologica:** il solver deve RECUPERARE A,B vicini ad
+   A_vero,B_vero (tolleranza esplicita, es. 1e-4 relativo) — non solo un
+   residuo piccolo sul target, ma il recupero dei parametri noti che
+   hanno generato il target. Verifica aggiuntiva: re-integrando con A,B
+   risolti si riottiene vx_target/vh_target entro la tolleranza del
+   solver.
+5. Test di fallimento esplicito: un target irraggiungibile con questi
+   spinta/tf (es. velocita' finale enormemente superiore a quanto la
+   spinta puo' fornire in tf secondi) deve produrre `RuntimeError`, non
+   un risultato silenzioso e sbagliato.
+
+#### 3. Struttura dei file
+
+```
+lanciatore/
+└── guida_esoatmosferica.py   # SOLO AGGIUNTA:
+                               #   risolvi_coefficienti_tangente_lineare(...)
+                               #   le 2 funzioni Step 4 restano invariate
+
+tests/
+└── test_guida_esoatmosferica.py   # nuovi test aggiunti (criteri punto 2),
+                                     # i 6 test Step 4 restano invariati
+```
+
+Nessuna modifica a nessun altro modulo. Nessun confronto col benchmark
+delta-v 9.1-10.0 km/s in questo step (resta al nuovo Step 7, dati
+reali).
+
+**Prossimo:** passare al sub-agente reviewer per il controllo critico di
+questo piano, poi al coder.
+
+#### 4. Addendum (reviewer + investigazione numerica indipendente
+dell'orchestratore) — recepito prima di passare al coder
+
+Verdetto reviewer: **approvabile con modifiche**. Il reviewer non aveva
+accesso a un interprete Python in quella sessione, quindi ha segnalato i
+suoi dubbi come rischi da verificare empiricamente, non fatti accertati
+(punto 2: conditioning del problema; punto 3: ambiguita' del "guess dalla
+formula chiusa"). **Li ho verificati io stesso con Bash — e ho trovato un
+problema PIU' SERIO di quanto il reviewer sospettasse.**
+
+**Scoperta (risultato inatteso, investigato secondo la regola CLAUDE.md,
+non nascosto):** ho costruito il target integrando avanti con
+A_vero=0.3, B_vero=-0.002 (mdot reale), poi ho fatto risolvere il
+problema inverso a `scipy.optimize.fsolve` partendo da un guess
+"ragionevole" (angolo medio verso il target, `B0=0`). **`fsolve` converge
+con residuo a precisione di macchina, ma su una soluzione SBAGLIATA**:
+`A=0.258, B=+0.002` invece di `A=0.3, B=-0.002` (segno di B INVERTITO,
+errore relativo su A del 14%, su B del 200%). Ripetuto con altre coppie
+A_vero/B_vero (es. 0.5/-0.02, 0.4/-0.015): lo stesso fenomeno si presenta
+sistematicamente, non e' un caso isolato.
+
+**Causa:** il problema (A,B)→(vx(tf),vh(tf)) ammette (almeno) DUE radici
+distinte per gli stessi due target — una "vera" e una "spuria" con B
+approssimativamente di segno opposto (una sorta di soluzione speculare:
+un profilo theta(t) leggermente crescente invece che leggermente
+decrescente puo' produrre pressoche' la stessa media integrata su un
+arco breve). Ho verificato con un test di consistenza: **il guess
+iniziale determina su quale radice converge Newton/fsolve** — un guess
+con `B0` dello STESSO SEGNO della verita' (anche solo approssimato, es.
+scalato 0.7x o 1.3x del valore vero) converge sempre alla radice
+corretta con residuo a precisione di macchina; un guess con `B0=0` o
+segno opposto converge quasi sempre alla radice spuria. **Il tentativo
+di costruire un guess automatico dalla formula chiusa dello Step 4
+(risolvendo il sistema implicito asinh/sqrt) NON risolve il problema**:
+l'ho implementato e testato, e converge anch'esso in modo incoerente
+sulla radice giusta o sbagliata a seconda del caso — non e' un problema
+di qualita' del guess "quanto vicino", ma di quale BACINO di attrazione
+(segno di B) si imbocca, informazione che il guess automatico non ha
+modo di indovinare senza gia' conoscere la risposta.
+
+**Conseguenza per il design (revisione del punto 1 sopra):**
+- **`A0`, `B0` diventano parametri OBBLIGATORI** di
+  `risolvi_coefficienti_tangente_lineare` (non piu' calcolati
+  automaticamente da una formula chiusa): la funzione documenta
+  esplicitamente che la convergenza al risultato fisicamente inteso
+  dipende da un guess nel bacino corretto (tipicamente noto dal contesto
+  di missione — es. il segno atteso della variazione dell'angolo di
+  guida — o da una soluzione vicina gia' nota, come avviene nei cicli
+  iterativi reali di guida esplicita: PEG non riparte mai da un default
+  generico, riusa la soluzione del ciclo precedente). Questo NON e' un
+  compromesso per pigrizia: e' una proprieta' strutturale del problema,
+  documentata invece che nascosta.
+- **Safeguard di robustezza (non risolve l'ambiguita' globale, la
+  rileva):** dopo la convergenza dal guess fornito, la funzione ripete
+  la risoluzione da un SECONDO guess ottenuto perturbando quello fornito
+  entro lo stesso bacino (es. `A0*1.3, B0*1.3`, stesso segno) e verifica
+  che le due soluzioni coincidano entro tolleranza stretta. Se non
+  coincidono, `RuntimeError` esplicito (bacino instabile/ambiguo con
+  questo guess, non un risultato silenzioso e potenzialmente sbagliato).
+- **Tolleranza di residuo:** fissata a `1e-6` (assoluta, sulle componenti
+  di velocita' in m/s) per la condizione di successo di `fsolve`
+  (verificata sia su `ier==1` sia sul residuo effettivo `info['fvec']`,
+  non fidandosi del solo flag, come gia' segnalato dal reviewer).
+- **Test companion non circolare (punto 1 del reviewer, risolto):**
+  aggiungere un test con `mdot=0` in cui il target e' calcolato con la
+  formula chiusa ESATTA dello Step 4 (non con `integra_tangente_lineare`
+  con mdot reale), rompendo la circolarita' tra generazione del target e
+  funzione di ricerca.
+- **Target irraggiungibile (punto 6 del reviewer, risolto con numero
+  esplicito):** limite di Tsiolkovsky per questi parametri,
+  `Δv_ideale = Isp*G0*ln(m0/m(tf)) ≈ 933 m/s` (verificato:
+  `300*9.80665*ln(1000/728.076)`). Usare `vh_target` enorme (non
+  `vx_target`, per evitare la regione di non-monotonicita' in A segnalata
+  dal reviewer punto 6) ben oltre questo limite, es. `vh_target = 5000`
+  m/s, per un fallimento di convergenza garantito e pulito.
+- **Test di documentazione del fenomeno (nuovo, non nel piano
+  originale):** un test dedicato che mostra ESPLICITAMENTE che un guess
+  con segno di B0 sbagliato converge su una soluzione diversa da
+  A_vero/B_vero pur con residuo piccolo — non per dimostrare un difetto,
+  ma per verificare che il fenomeno documentato nella docstring sia
+  realmente riproducibile e non un'illazione, e per proteggere contro
+  una futura "correzione" involontaria che lo nasconda.
+
+**Valori numerici verificati da me (Bash, per il coder):** con
+`m0=1000, spinta=40000, isp=300, tf=20` (`mdot≈13.609 kg/s`,
+`mdot*tf≈272.1 kg`, margine ampio come da Step 4), `A_vero=0.3,
+B_vero=-0.002`: `vx_target=899.267274 m/s`, `vh_target=54.681127 m/s`
+(calcolati da `integra_tangente_lineare`, NON a mano — nessun rischio di
+cancellazione catastrofica, il valore e' quello che il codice produce
+realmente). Guess raccomandato per il test: `A0=A_vero*0.7=0.21,
+B0=B_vero*0.7=-0.0014` (converge esatto, verificato: residuo ~1e-13).
+
+#### 5. Esito ciclo (coder + critic-ingegnere, pipeline snellita —
+pulizia e chiusura fatte direttamente dall'orchestratore)
+
+- **coder**: implementata `risolvi_coefficienti_tangente_lineare` in
+  coda a `guida_esoatmosferica.py` (funzioni Step 4 invariate,
+  confermato), con il safeguard a doppio guess e la gestione esplicita
+  del fallimento esattamente come da addendum. 4 nuovi test aggiunti
+  (recupero non tautologico, companion non circolare mdot=0, fallimento
+  esplicito con limite Tsiolkovsky calcolato in codice, documentazione
+  del fenomeno delle radici spurie). 48/48 test verdi, valori numerici
+  coincidenti al bit con la mia verifica indipendente.
+- **critic-ingegnere**: ha RIPRODOTTO DA ZERO (script separato, non
+  copiato da STATUS.md) il fenomeno delle radici multiple — stessi
+  numeri esatti (vx_target/vh_target coincidenti, radice spuria
+  A=0.257901/B=+0.001999 coincidente), confermando che non è un
+  artefatto di trascrizione. Verificato anche che il safeguard non è
+  codice morto (testato con guess al bordo del bacino, scatta
+  effettivamente). pytest rieseguito in modo indipendente (48 passed).
+  Nessuna violazione. Nota: nessun commit intermedio dopo lo Step 4
+  rende impossibile un `git diff` letterale per queste verifiche —
+  raccomandato un commit dopo ogni step completato (proporrò ora
+  all'utente di committare Step 4-6 insieme).
+- **Pulizia (io, non optimizer):** codice già ben strutturato
+  (funzione + helper privato separati, docstring esaustiva), nessuna
+  correzione necessaria.
+
+**Step 6: COMPLETATO.** Ciclo che ha prodotto la scoperta più
+significativa del progetto finora dal punto di vista numerico: il
+problema inverso della tangente lineare ammette radici multiple/spurie,
+un fenomeno reale (verificato indipendentemente due volte, da me e dal
+critic-ingegnere) non documentato nella letteratura di riferimento
+citata in modo esplicito per questo caso — la soluzione adottata (guess
+obbligatorio nel bacino corretto + safeguard a doppio guess che rileva,
+senza pretendere di risolvere, l'ambiguità) è un design onesto rispetto
+al problema reale, non un aggiramento. Prossimo step proposto: Step 7
+(caso di validazione con dati reali, ora può riusare questo risolutore).
