@@ -20,7 +20,7 @@
     (integra, non risolve). Questo step (ex-Step 6) richiede il problema
     INVERSO, ora scorporato nel nuovo Step 6 dedicato — qui si riusa il
     risolutore del nuovo Step 6, non lo si reimplementa.
-- [ ] Step 8: Estensione — staging durante la fase di guida a tangente
+- [x] Step 8: Estensione — staging durante la fase di guida a tangente
   lineare (aggiunto 2026-08-16, NON opzionale per il progetto finale,
   solo rimandato nell'ordine — vedi decisione utente nel Ciclo 5).
   Root-finding di A/B per segmento (si appoggia al problema inverso, ora
@@ -2285,6 +2285,18 @@ del ciclo, non forzato a zero.
      Isp-SL. La validazione passa, ma per un margine stretto, non
      ampio — da tenere presente nei confronti futuri (Step 8/9), non da
      presentare come un fit comodo.
+     **Nota dell'utente (2026-08-16, aggiunta anche in CLAUDE.md come
+     disclaimer permanente):** il confronto col benchmark 9.1-10.0 km/s
+     è un controllo di **plausibilità in un range realistico generico**,
+     NON una riproduzione precisa del Falcon 9 reale. Il modello esclude
+     per costruzione il bonus di rotazione terrestre (dichiarato fuori
+     scope da CLAUDE.md fin dall'inizio) — per un lancio verso est da
+     Cape Canaveral (28.5°N) questo bonus vale **≈409 m/s**
+     (`465.1 m/s * cos(28.5°)`), calcolato esplicitamente, **maggiore
+     del margine di 38 m/s con cui il check è stato superato**. Il check
+     resta valido come verifica di ordine di grandezza, non come
+     confronto quantitativo diretto con le prestazioni di missione di
+     un lancio reale specifico da un sito equatoriale/subtropicale.
   2. **Drag basso (16.7 m/s) plausibile ma al limite del range di
      letteratura (100-400 m/s)**: il critic-ingegnere ha verificato
      indipendentemente il profilo di pressione dinamica dello Stadio 1
@@ -2323,3 +2335,176 @@ dimostrazione di conservazione) usato per ogni scoperta precedente.
 Prossimo step proposto: Step 8 (estensione — staging durante la fase di
 guida a tangente lineare, che riuserà il safeguard a doppio guess già
 costruito qui, come annotato in memoria).
+
+---
+
+### 2026-08-16 — Ciclo 8 (piano scritto direttamente dall'orchestratore,
+indagine numerica pre-piano)
+
+**Nota di processo:** pipeline snellita confermata: scrivo io il piano,
+salto `planner`/`optimizer`/`reporter`, mantengo `reviewer` e
+`critic-ingegnere`.
+
+**Step:** 8 — Estensione: staging durante la fase di guida a tangente
+lineare.
+
+**Promemoria onorato (nota utente + memoria persistente, Ciclo 6):** il
+problema inverso A/B ha radici multiple/spurie per un singolo segmento;
+atteso che il fenomeno si ripresenti con più segmenti concatenati. Il
+safeguard a doppio guess già in `risolvi_coefficienti_tangente_lineare`
+va riusato, non reinventato.
+
+#### 1. Design (verificato numericamente prima di scrivere il piano)
+
+**Scenario dimostrativo:** un segmento di guida a tangente lineare
+pianifica A1,B1 per un target finale assumendo (erroneamente) di
+bruciare per l'intera durata nominale — ma lo staging avviene PRIMA del
+previsto, invalidando quel piano. Il nuovo segmento deve ricalcolare
+A2,B2 dallo stato EFFETTIVO di handoff per raggiungere comunque lo
+stesso target. Scelto invece di un target intermedio arbitrario perché
+DIMOSTRA (non solo asserisce) il motivo per cui questo step esiste.
+
+**Parametri verificati (Bash, convergenza robusta):**
+- Segmento 1: m0=1000 kg, spinta=40000 N, isp=300 s, h0=5000 m (margine
+  quota positivo, stesso principio di Fase A/Ciclo 7). Target finale:
+  vx=1800 m/s, vh=0 (entro capacità ideale Tsiolkovsky ≈2309 m/s del
+  solo segmento 1). tf1 nominale=40s. `A1=2.19215, B1=-0.081227`
+  (convergenza identica da 5/6 guess diversi).
+- **Staging anticipato a t=15s**: stato allo staging `x=2412.78,
+  h=8077.61, vx=369.26, vh=408.74, m=796.057`. `m_strut1=100 kg`
+  (provvisorio) → `m_ignizione2=696.057 kg`.
+- **Prova che A1,B1 non sono più validi:** integrando il segmento 2 con
+  A1,B1 invariati sotto i nuovi parametri, si ottiene `vx=771.37,
+  vh=565.59` — lontano dal target (1800, 0).
+- Segmento 2: spinta=40000 N, isp=320 s, tf2=25s. Ri-risolto dallo
+  stato EFFETTIVO di handoff: `A2=1.859568, B2=-0.145024`, target
+  raggiunto ESATTAMENTE (vx=1800.000, vh=0.00000).
+- **Fenomeno radici multiple RICONFERMATO** (non solo atteso per
+  analogia): guess `(A0=0.5, B0=-0.01)` converge a una radice DIVERSA
+  ma ugualmente valida (`A2=-2.29081, B2=0.149645`, stesso target
+  raggiunto esattamente).
+
+#### 2. Nuovo modulo
+
+`lanciatore/staging_esoatmosferico.py`: (1) risolve A1,B1 nominali; (2)
+integra segmento 1 solo fino al tempo di staging; (3) applica
+discontinuità di massa (stato effettivo meno massa strutturale, stesso
+principio di `staging.py`); (4) ri-risolve A2,B2 dallo stato di
+handoff; (5) ritorna entrambi i segmenti + i coefficienti di entrambi i
+piani (originale e ricalcolato) per il confronto esplicito. Riuso
+totale di `guida_esoatmosferica.py`, nessuna modifica a moduli
+esistenti.
+
+#### 3. Criteri di verifica
+
+1. Continuità di stato allo staging (x,h,vx,vh esatti; massa che
+   differisce esattamente di `m_strut1`).
+2. **Dimostrazione esplicita** che A1,B1 non validi post-staging
+   (errore >10% integrando con i vecchi coefficienti) PRIMA di
+   verificare che il ricalcolo funzioni.
+3. A2,B2 ricalcolati raggiungono il target entro la tolleranza del
+   risolutore (riusata, non allargata).
+4. Documentazione del fenomeno radici multiple in questo contesto
+   multi-segmento.
+5. Nessun NaN/inf sulla traiettoria concatenata.
+
+Nessun dato reale in questo step (scenario di test, come Step 5).
+Nessun nuovo check delta-v (resta quello di Step 7).
+
+**Prossimo:** passare al sub-agente reviewer per il controllo critico
+di questo piano, poi al coder.
+
+#### 4. Addendum (reviewer) — recepito prima di passare al coder
+
+Verdetto reviewer: **da rivedere**, tre problemi concreti, tutti
+risolti e verificati numericamente prima del coder:
+
+**1. Lo staging deve essere un vero evento ODE terminale, non un
+cutoff scriptato.** Riformulato lo scenario: il Segmento 1 non ha
+propellente per l'intera durata nominale ipotizzata in fase di
+pianificazione (40s) — porta realisticamente solo
+`m_prop1_reale = mdot1*15s ≈ 203.94 kg` (mdot1≈13.596 kg/s), quindi
+esaurisce il propellente a t≈15s per un vincolo fisico reale del
+veicolo, non per un taglio arbitrario. Soglia di massa
+`m_soglia1 = m0 - m_prop1_reale ≈ 796.06 kg`. Implementato come evento
+terminale genuino (`y[4]-m_soglia1`, `terminal=True`, `direction=-1`),
+stesso pattern di `evento_fine_propellente_2d` in `staging.py`, con
+`solve_ivp` chiamato DIRETTAMENTE (bypassando `integra_tangente_lineare`,
+che non espone `events`) — stesso approccio già usato in `staging.py`
+per gli stadi 2..N.
+
+**2. Regola di seeding deterministica per il guess del Segmento 2:**
+usare direttamente `A0=A1, B0=B1` (i coefficienti convergenti del
+segmento precedente) come guess per ri-risolvere il segmento
+successivo — verificato numericamente che converge in modo affidabile
+(3/3 prove ripetute) alla radice fisicamente continua
+(`A2=1.85957, B2=-0.145024`), non a quella spuria. Coerente col
+principio già scritto nella docstring di
+`risolvi_coefficienti_tangente_lineare` ("PEG non riparte mai da un
+default generico, riusa la soluzione del ciclo precedente"). Nuovo
+criterio di verifica esplicito: la funzione di staging usa SEMPRE
+questa regola (non un guess arbitrario), e un test verifica la stabilità
+ripetendo la risoluzione 3 volte confermando convergenza identica.
+
+**3. Metrica di errore e continuità temporale precisate per la "prova
+di invalidità" (criterio 2).** Continuare il piano ORIGINALE senza
+ricalcolo significa continuare il MEDESIMO profilo `theta(t)` con
+tempo assoluto continuo (non un orologio che riparte da zero al
+segmento 2) — equivalente a integrare il segmento 2 con
+`A0_continuato = A1 + B1*t_stage`, `B0_continuato = B1` (stesso B,
+A traslato dell'offset temporale). **Ricalcolato con questa convenzione
+corretta** (la prima stima nel piano, `vx=771/vh=566`, era gonfiata da
+un artefatto di reset del tempo, non solo dalla discontinuità fisica):
+risultato onesto **vx=2045.76, vh=-41.90** contro target (1800, 0) —
+errore euclideo 249.3 m/s, **errore relativo 13.85%** (sopra la soglia
+10%, criterio ancora soddisfatto ma con un numero corretto, non
+gonfiato). Metrica precisata: errore euclideo in (vx,vh) normalizzato
+sulla norma del target (non errore per-componente, indefinito per
+`vh_target=0`).
+
+**Confermato senza modifiche (verificato positivamente dal reviewer):**
+continuità Stadio1→Stadio2 è un riporto diretto (x,h,vx,vh, nessuna
+conversione trigonometrica necessaria, a differenza dello Step 7 dove
+si passava da stato polare v,γ a cartesiano vx,vh) — caso più semplice
+di `staging.py`, da non confondere aggiungendo l'helper di conversione
+dello Step 7 dove non serve.
+
+**Prossimo:** coder implementa secondo questo design consolidato.
+
+#### 5. Esito ciclo (coder + critic-ingegnere, pipeline snellita)
+
+- **coder**: implementato `lanciatore/staging_esoatmosferico.py` +
+  `tests/test_staging_esoatmosferico.py` esattamente secondo il design
+  consolidato. Nessuna ambiguità residua (piano+addendum sufficientemente
+  precisi). 73/73 test verdi (65 pregressi + 8 nuovi). Tutti i numeri
+  coincidono con la verifica pre-piano dell'orchestratore: A1=2.1921496,
+  B1=-0.0812265; evento genuino a t_stage=15.0s esatto (status=1, non
+  t_span esaurito); A2=1.8595704, B2=-0.1450243 (target raggiunto,
+  vx=1799.9999996, vh≈-1.8e-8); errore "senza ricalcolo" 13.85%; radice
+  spuria confermata (A=-2.290804, B=0.149645, target comunque raggiunto).
+- **critic-ingegnere**: ricalcolo INDIPENDENTE di ogni numero chiave
+  (script separato) — coincidenza esatta. Vincolo "Multistadio: eventi
+  di staging come eventi terminali ODE" verificato esplicitamente
+  (status==1, t_events=[15.0], non un cutoff scriptato). Regola di
+  seeding A0=A1/B0=B1 verificata nel codice e ripetuta 5 volte
+  (convergenza identica bit-per-bit). Fenomeno radici multiple
+  riconfermato con un TERZO guess indipendente non presente nel piano
+  (-1.0, 0.05), anch'esso convergente alla stessa radice spuria — non
+  un artefatto di un guess specifico. Nessun modulo esistente
+  modificato (git diff vuoto). 73/73 confermati indipendentemente.
+  Nessuna violazione. Ha ri-segnalato (non nuovo, pre-esistente e già
+  documentato) il margine stretto del delta-v di missione dello Step 7.
+- **Pulizia (io, non optimizer):** test già ben organizzati, nessuna
+  correzione necessaria.
+
+**Step 8: COMPLETATO.** Il fenomeno delle radici multiple scoperto allo
+Step 6 si è confermato riemergere in un contesto multi-segmento, esattamente
+come anticipato dalla nota utente/memoria persistente — e il safeguard
+già costruito (regola di seeding deterministica, non un default
+arbitrario) si è dimostrato sufficiente senza dover reinventare nulla.
+Anche il reviewer, in questo ciclo, ha trovato un problema reale prima
+dell'implementazione: la prima versione del "test di invalidità"
+avrebbe gonfiato l'errore per un artefatto di reset del tempo (report
+di un ~65% invece del 13.85% reale) — corretto prima di scrivere codice.
+Prossimo step proposto: Step 9 (visualizzazione, traiettoria numerica +
+animazione).

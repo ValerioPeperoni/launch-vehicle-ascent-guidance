@@ -30,6 +30,26 @@ dei progetti open source di settore.
 | **Check di validazione obbligatorio** | Il delta-v totale della traiettoria simulata deve avvicinarsi al range noto ~9.1-10.0 km/s per un'orbita LEO (~7.8 km/s velocita' orbitale + ~1.0-1.5 km/s perdite gravitazionali + ~0.1-0.4 km/s resistenza) | Se lo scarto e' grande, c'e' un errore da isolare, non da nascondere |
 | Progetti di riferimento concettuale (NON copiare codice) | axelstr/gravity_turn_simulation, bvermeulen/Rocket-and-gravity-turn, b-adkins/pyrocket | Solo per calibrare scope e approssimazioni ragionevoli |
 
+**Disclaimer esplicito sul check di validazione (aggiunto 2026-08-16,
+dopo il primo caso di validazione con dati Falcon 9, Step 7):** il
+confronto delta-v vs 9.1-10.0 km/s e' un controllo di **plausibilita' in
+un range realistico generico**, NON una riproduzione precisa di uno
+specifico lancio reale. Il modello esclude per costruzione il bonus di
+velocita' dovuto alla rotazione terrestre (dichiarato fuori scope fin
+dall'inizio, vedi riga "Dinamica" sopra) — per un lancio verso est da un
+sito equatoriale/subtropicale come Cape Canaveral (28.5°N) questo bonus
+vale ≈409 m/s (`465.1 m/s * cos(28.5°)`, velocita' equatoriale di
+rotazione proiettata sulla latitudine del sito). Questo valore e' **piu'
+grande del margine con cui il check e' stato superato la prima volta**
+(38 m/s sopra il limite inferiore del range, Step 7): un confronto
+diretto e quantitativo col delta-v di missione di un lancio reale
+specifico da un sito equatoriale/subtropicale non sarebbe valido senza
+tenerne conto esplicitamente. Il check resta comunque valido come
+verifica di ordine di grandezza (il modello non deve produrre un
+delta-v totale palesemente sbagliato, es. 5 km/s o 15 km/s), ma non va
+presentato ne' interpretato come una riproduzione accurata delle
+prestazioni di un lanciatore reale specifico.
+
 ## Estensioni future dichiarate (fuori scope per ora, non implementare senza richiesta esplicita)
 - Rotazione terrestre / 3D completo
 - 6-DOF (rotazione del veicolo, momenti aerodinamici)
