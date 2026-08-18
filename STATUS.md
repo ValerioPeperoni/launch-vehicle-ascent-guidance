@@ -62,7 +62,7 @@
     Verificato due volte in modo indipendente (orchestratore +
     critic-ingegnere). Dettaglio completo: STATUS.md Ciclo 10,
     disclaimer aggiornato in CLAUDE.md (2026-08-18).
-- [ ] Step 10: Validazione e documentazione dei limiti (VALIDATION.md, confronto concettuale con i progetti di riferimento)
+- [x] Step 10: Validazione e documentazione dei limiti (VALIDATION.md, confronto concettuale con i progetti di riferimento)
 - [ ] Step 11: Pulizia, documentazione, README, preparazione per GitHub
 
 ## Log cicli
@@ -2979,3 +2979,191 @@ prima di arrivare a questa spiegazione — nessuna scorciatoia, il
 percorso è documentato per intero in questo log. Prossimo step
 proposto: Step 10 (validazione e documentazione dei limiti — questa
 scoperta e la sua chiusura sono un candidato naturale per VALIDATION.md).
+
+---
+
+### 2026-08-18 — Ciclo 11 (io, pipeline snellita): piano Step 10 — VALIDATION.md
+
+**Step:** 10 — Validazione e documentazione dei limiti (VALIDATION.md,
+confronto concettuale con i progetti di riferimento)
+**Stato:** pianificazione completata (io, senza sub-agente planner, per
+lo stesso motivo già seguito dagli step precedenti: step di
+documentazione, nessuna nuova fisica).
+
+#### 1. Contesto
+
+Step 1-9 + Ciclo 10 completi, 91/91 test verdi, commit locale `e1cb826`.
+Questo step non introduce nuova fisica: raccoglie in un documento unico
+(`VALIDATION.md`, nuovo file in root) tutte le approssimazioni
+dichiarate in CLAUDE.md e i loro impatti REALI già scoperti e
+quantificati durante il progetto (nessuna nuova stima), più un
+confronto concettuale onesto con i tre progetti di riferimento citati
+in CLAUDE.md.
+
+#### 2. Ricerca preliminare (WebFetch, letto ma non copiato)
+
+Ricerca fattuale sui tre repository citati in CLAUDE.md come
+"riferimento concettuale (NON copiare codice)":
+
+- **axelstr/gravity_turn_simulation**: 2D, MULTISTADIO, guida attiva
+  reale (cutoff automatico all'apogeo target + manovra di
+  circolarizzazione) — più empirica/euristica della tangente lineare
+  di questo progetto (derivata analiticamente da Perkins/PEG). Nessuna
+  validazione con dati reali dichiarata nel repo.
+- **bvermeulen/Rocket-and-gravity-turn**: 2D, MONOSTADIO, ha ANCHE
+  controllo ottimo della spinta verso obiettivi orbitali (risolutore
+  CasADi, ottimizzazione numerica diretta/collocazione) — sofisticazione
+  comparabile alla guida di questo progetto, ma con metodo diverso
+  (collocazione numerica vs shooting analitico). Nessuna validazione
+  con dati reali dichiarata.
+- **b-adkins/pyrocket**: attualmente 1D (2D è roadmap, non implementato),
+  MULTISTADIO, nessuna guida attiva sofisticata (gravity turn "in
+  roadmap"). Orientato a scopo didattico/stile KSP.
+
+Questo AGGIORNA (rende più preciso, non contraddice) il claim originale
+di CLAUDE.md "i progetti individuali reali... usano tutti punto
+materiale 2D": resta vero per la dinamica, ma va precisato che due dei
+tre hanno comunque guida attiva sofisticata (uno multistadio con
+cutoff automatico, l'altro con controllo ottimo via CasADi) — nessuno
+dei tre usa pero' una legge di guida analiticamente derivata e citata
+in letteratura (Perkins/PEG) come questo progetto, ne' dichiara un
+confronto quantitativo con un benchmark reale con margine esplicito.
+
+#### 3. Design — struttura di VALIDATION.md
+
+Nuovo file `VALIDATION.md` in root, 5 sezioni:
+
+1. **Sintesi del check di validazione obbligatorio**: Δv ideale totale
+   9138.15 m/s, dentro il range 9.1-10.0 km/s, margine 38 m/s sopra il
+   limite inferiore — riassunto, rimanda a STATUS.md Ciclo 7/10 per il
+   dettaglio del calcolo (non ripetuto per esteso).
+2. **Tabella delle approssimazioni dichiarate in CLAUDE.md, con impatto
+   MISURATO (non stimato ora) dove disponibile:**
+   - *Atmosfera esponenziale*: errore ~26% a 11km, ~2.5% a 25km rispetto
+     al modello di riferimento (Step 1, test_atmosfera.py).
+   - *Cd costante*: nessun impatto quantificato disponibile nel
+     progetto (nessun dato di confronto Cd-vs-Mach) — dichiarato
+     onestamente come limite non misurato, non presentato come
+     "presumibilmente trascurabile".
+   - *Gravity turn senza sollievo centripeto*: 12.2%-17.3% di g alla
+     velocità di fine Stadio 1 (Ciclo 7 Fase A) — NON corretto (solo la
+     fase esoatmosferica lo è, Ciclo 7 Fase A), asimmetria accettata e
+     dichiarata esplicitamente, non risolta.
+   - *Niente rotazione terrestre*: bonus escluso ≈408.74 m/s
+     (`465.1*cos(28.5°)`, sito equatoriale/subtropicale) — **dimostrato
+     essere la spiegazione quantitativa completa del deficit di perigeo
+     scoperto al Ciclo 10** (deficit ~67 m/s, coperto dal bonus con
+     margine). Raccontato per esteso qui come l'esempio più forte del
+     progetto di "approssimazione dichiarata → impatto misurato →
+     conseguenza verificata due volte in modo indipendente", non solo
+     linkato a STATUS.md.
+   - *Drag inferiore al range di letteratura*: 16.7 m/s di perdita
+     ideale da drag, contro 100-400 m/s tipicamente citati in
+     letteratura generica — spiegato (non un errore nascosto) via
+     confronto Max-Q con dati reali Falcon 9 (Ciclo 9/10,
+     critic-ingegnere): il profilo di traiettoria di questo progetto
+     attraversa la zona di massima pressione dinamica più rapidamente/
+     con Cd*A minore del velivolo reale completo.
+3. **Fenomeno delle radici multiple nel problema inverso tangente
+   lineare** (Step 6/8): non un'approssimazione fisica ma una
+   caratteristica nota del metodo numerico (shooting via
+   scipy.optimize) — documentato come limite metodologico: richiede un
+   guess nel bacino di attrazione corretto, nessuna garanzia di
+   convergenza globale. Mitigato (non eliminato) dal safeguard a doppio
+   guess costruito allo Step 6 e riusato allo Step 8.
+4. **Confronto concettuale con i progetti di riferimento** (tabella,
+   dati dalla ricerca del punto 2, parafrasati non citati/copiati):
+   scope (2D/3D), multistadio, tipo di guida, validazione con dati
+   reali dichiarata. Posiziona onestamente questo progetto (guida
+   analiticamente derivata e citata in letteratura, validazione
+   quantitativa con margine esplicito e limiti dichiarati) senza
+   sminuire gli altri (approcci diversi, non necessariamente inferiori
+   — es. il controllo ottimo CasADi di bvermeulen è un metodo valido,
+   solo diverso da quello scelto qui).
+5. **Estensioni future dichiarate**: riprese da CLAUDE.md, con lo stato
+   di avanzamento reale — es. lo Step 8 (staging in tangente lineare)
+   copre già qualcosa che la formulazione originale del vincolo
+   "Multistadio" non specificava esplicitamente per la fase
+   esoatmosferica; le altre (rotazione terrestre, 6-DOF, Cd variabile,
+   ottimizzazione della traiettoria) restano fuori scope come
+   dichiarato, senza modifiche.
+
+#### 4. Esecuzione (pipeline snellita)
+
+1. Questo piano, scritto qui in STATUS.md.
+2. **reviewer**: verifica accuratezza (nessun numero sovra/sottostimato
+   rispetto a STATUS.md) e che il confronto con i progetti di
+   riferimento sia onesto e non copi testo/codice (solo parafrasi
+   fattuale).
+3. Io scrivo `VALIDATION.md` (documentazione pura, nessun `coder`
+   necessario).
+4. **critic-ingegnere**: verifica che ogni numero citato in
+   VALIDATION.md corrisponda esattamente a un valore già verificato in
+   STATUS.md (nessuna nuova stima non tracciata).
+5. Pulizia, aggiornamento STATUS.md, report — fatti da me.
+6. Mi fermo e attendo conferma dell'utente prima di passare allo
+   Step 11 (pulizia, README, preparazione per GitHub).
+
+#### 5. File coinvolti
+
+- `VALIDATION.md` (nuovo, root del progetto)
+- `STATUS.md` (questo piano)
+- Nessuna modifica al codice Python, nessun nuovo test (step di sola
+  documentazione)
+
+**Prossimo:** dispatch del sub-agente reviewer su questo piano.
+
+#### 6. Esito ciclo (reviewer + verifica indipendente + critic-ingegnere)
+
+- **reviewer**: cross-check numerico di tutti i valori del piano contro
+  STATUS.md — nessuna discrepanza trovata. Segnalati 6 punti di
+  miglioramento, di cui 2 vincolanti (requisiti già imposti in
+  precedenza nel progetto, non solo suggerimenti nuovi): (1) mancava il
+  numero di sensibilità Isp-SL (8763.81 m/s) nella sintesi del check
+  Δv — obbligo esplicito del reviewer al Ciclo 7 ("riportare
+  ESPLICITAMENTE ANCHE il numero con Isp SL... come limite inferiore
+  di sensibilità"); (2) nessuna verifica indipendente delle
+  affermazioni sui tre progetti esterni (un'unica ricerca WebFetch
+  fatta da un solo agente, incoerente con lo standard di doppia
+  verifica già applicato ad ogni scoperta importante del progetto).
+  Altri 4 suggerimenti minori: citazione URL/data per la ricerca sui
+  repo esterni, raccordo esplicito Δv-ideale-vs-orbita-raggiunta,
+  asimmetria non dichiarata guida-tangente-lineare-derivata-per-g-costante
+  vs dinamica-integrata-con-g-variabile, numeri di supporto per la
+  Sezione 3 (radici multiple).
+- **Verifica indipendente aggiuntiva (io)**: dispatch di un secondo
+  agente (general-purpose, con WebFetch) per rifare la ricerca sui tre
+  repository esterni SENZA fornirgli le mie conclusioni precedenti,
+  per un controllo davvero indipendente (risponde al punto 2 del
+  reviewer). Risultato: conferma sostanziale di tutti i fatti già
+  raccolti, con una precisazione (axelstr non dichiara esplicitamente
+  la dimensionalità 2D nel README — è un'inferenza dal contesto, non
+  un fatto dichiarato — corretto in VALIDATION.md per non
+  sovra-affermare).
+- **Scrittura VALIDATION.md (io)**: tutti i 6 punti del reviewer
+  incorporati: aggiunta la sensibilità Isp-SL in Sezione 1 con nota
+  esplicativa sul perché Isp-vuoto è la scelta di base ma il margine è
+  sensibile a quella scelta; aggiunto un paragrafo di raccordo che
+  distingue esplicitamente "capacità ideale del veicolo" (check Δv)
+  da "stato cinematico finale raggiunto" (orbita); aggiunta una nuova
+  sottosezione sull'asimmetria guida-tangente-lineare/dinamica
+  integrata; aggiunto l'esempio numerico concreto del Ciclo 6
+  (A=0.258,B=+0.002 vs A_vero=0.3,B_vero=-0.002) alla Sezione 3;
+  aggiunti i link diretti ai tre repository nella tabella di
+  confronto Sezione 4, con nota sulla dimensionalità di axelstr
+  corretta a "non dichiarata esplicitamente, verosimilmente...".
+- **critic-ingegnere**: verifica puntuale di tutti i 13 numeri citati
+  in VALIDATION.md contro STATUS.md — tutti CONFERMATI (con
+  arrotondamenti dichiarati e coerenti, es. 16.73→16.7 m/s,
+  -22.77→-22.8 km), nessun numero nuovo non tracciato o alterato.
+  Confermata anche la coerenza della Sezione 4 (confronto progetti
+  esterni) con il piano di questo ciclo. **Verdetto: il documento è
+  pronto così com'è.**
+
+**Ciclo 11: COMPLETATO.** `VALIDATION.md` creato in root, 5 sezioni
+come da piano, tutti i numeri tracciabili a STATUS.md, nessuna nuova
+fisica introdotta, confronto con i progetti di riferimento basato su
+ricerca reale e verificato due volte in modo indipendente. Nessuna
+modifica al codice Python, nessun nuovo test (step di sola
+documentazione, coerente con la sua natura). Prossimo step proposto:
+Step 11 (pulizia, documentazione, README, preparazione per GitHub).
