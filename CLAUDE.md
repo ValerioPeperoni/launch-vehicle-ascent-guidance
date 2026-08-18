@@ -50,6 +50,27 @@ delta-v totale palesemente sbagliato, es. 5 km/s o 15 km/s), ma non va
 presentato ne' interpretato come una riproduzione accurata delle
 prestazioni di un lanciatore reale specifico.
 
+**Chiusura quantitativa (aggiunta 2026-08-18, Step 7 rivisitato dopo la
+scoperta della Step 9):** ispezionando visivamente l'output dello Step 9
+e' emerso che lo stato finale della traiettoria Falcon 9 non
+corrispondeva a un'orbita LEO stabile (perigeo calcolato sotto la
+superficie terrestre, circa -62 km con il primo risolutore). Corretto il
+risolutore dello Stadio 2 perche' vincoli quota finale e componente
+verticale della velocita' (non piu' solo la velocita' orizzontale),
+riducendo lo scarto a circa -21/-23 km. Esplorate senza successo altre
+leve (obiettivo a velocita' circolare auto-consistente, tempo di
+bruciamento libero come terza incognita, entrambe non risolutive:
+convergono comunque a un deficit residuo) prima di verificare
+direttamente l'ipotesi del disclaimer sopra: **aggiungendo il bonus di
+rotazione terrestre (408.7 m/s) allo stato finale, il perigeo diventa
+positivo (+200 km)** — il deficit trovato (~67 m/s in velocita'
+orizzontale, equivalente a circa -22 km di perigeo) e' quindi
+interamente spiegato e superato dalla rotazione terrestre gia' esclusa
+per scope, non un difetto nuovo del modello. Verificato indipendentemente
+due volte (orchestratore + critic-ingegnere) con la stessa meccanica
+orbitale (energia specifica + momento angolare, fonte Curtis) usata per
+la diagnosi originale. Dettaglio completo in STATUS.md, Ciclo 10.
+
 ## Estensioni future dichiarate (fuori scope per ora, non implementare senza richiesta esplicita)
 - Rotazione terrestre / 3D completo
 - 6-DOF (rotazione del veicolo, momenti aerodinamici)

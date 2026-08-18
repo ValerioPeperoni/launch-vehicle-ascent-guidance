@@ -202,6 +202,31 @@ H_TARGET = 200_000.0     # m, quota orbitale target (LEO circolare, 200 km)
 A0_GUESS_STADIO2 = -0.04
 B0_GUESS_STADIO2 = 0.0009
 
+# Guess iniziale per i coefficienti A, B dello Stadio 2 col NUOVO
+# obiettivo di quota+verticalita' (STATUS.md Ciclo 10, indagine numerica
+# pre-piano): la regione precedente (A0_GUESS_STADIO2 sopra) era tarata
+# per il vecchio obiettivo (vx/vh target) e non e' un buon punto di
+# partenza per il nuovo. Verificato numericamente che (A0=0.3, B0=0.0)
+# converge in modo pulito e a precisione di macchina (fun~=2.4e-14) per
+# lo stato di handoff Stadio1->Stadio2 di questo modulo; altri guess
+# provati falliscono per ValueError di dominio durante l'esplorazione
+# dell'ottimizzatore (comportamento gia' noto, gestito dal fallback
+# residuo-costante, vedi _obiettivo_residuo_quota_verticale).
+A0_GUESS_STADIO2_QUOTA = 0.3
+B0_GUESS_STADIO2_QUOTA = 0.0
+
+# Bonus di velocita' orizzontale dovuto alla rotazione terrestre per un
+# sito di lancio equatoriale/subtropicale come Cape Canaveral (28.5°N),
+# GIA' quantificato nel disclaimer di CLAUDE.md (sezione aggiunta
+# 2026-08-16): 465.1 m/s (velocita' equatoriale di rotazione terrestre)
+# proiettata sulla latitudine del sito, cos(28.5°). Il modello di questo
+# progetto esclude per costruzione la rotazione terrestre (CLAUDE.md,
+# riga "Dinamica"): questa costante e' usata SOLO come termine di
+# sensibilita' esplicito in ``verifica_orbita_stabile`` (parametro
+# ``bonus_rotazione``), mai applicata di default alla traiettoria
+# simulata.
+BONUS_ROTAZIONE_TERRESTRE = 465.1 * math.cos(math.radians(28.5))
+
 
 def converti_v_gamma_a_vx_vh(v, gamma):
     """Converte lo stato polare della Fase B gravity turn in componenti cartesiane.
@@ -419,11 +444,190 @@ def risolvi_stadio_2_minimi_quadrati(
     }
 
 
-def assembla_traiettoria(A0=A0_GUESS_STADIO2, B0=B0_GUESS_STADIO2, h_target=H_TARGET):
+def _obiettivo_residuo_quota_verticale(
+    coefficienti, m0, spinta, mdot, tf, x0, h0, vx0, vh0, h_target, vh_target
+):
+    """Obiettivo NORMALIZZATO su quota finale e velocita' verticale finale (Ciclo 10).
+
+    Vedi STATUS.md, Ciclo 10, addendum (reviewer punto 6): a differenza di
+    ``_obiettivo_residuo_quadratico`` (che vincola solo vx/vh, lasciando la
+    quota finale libera), questo obiettivo vincola ESPLICITAMENTE la quota
+    di iniezione (``h_target``) e la componente verticale della velocita'
+    (tipicamente ``vh_target=0.0``, iniezione circolare) -- la coppia di
+    vincoli che identifica davvero il perigeo/apogeo dell'orbita
+    risultante (vedi ``verifica_orbita_stabile``), a differenza del
+    vecchio obiettivo che lasciava la quota libera.
+
+    Obiettivo normalizzato (reviewer punto 6: metri^2 e (m/s)^2 sommati
+    direttamente sarebbero mal condizionati)::
+
+        ((h(tf) - h_target) / h_target)**2 + (vh(tf) / v_target_circolare)**2
+
+    con ``v_target_circolare = sqrt(MU_TERRA / (R_TERRA + h_target))``
+    (``velocita_orbitale_target``, gia' definita in questo modulo) usata
+    per dare scala fisicamente sensata al termine di velocita'.
+
+    Stesso principio di fallback di ``_obiettivo_residuo_quadratico``:
+    ``ValueError`` di dominio (traiettorie di tentativo che scendono sotto
+    quota zero) o integrazione non riuscita -> valore scalare enorme ma
+    finito (muro, non pendio).
+    """
+    A, B = coefficienti
+    try:
+        risultato = ge.integra_tangente_lineare(
+            m0, spinta, mdot, A, B, tf, x0=x0, h0=h0, vx0=vx0, vh0=vh0
+        )
+    except ValueError:
+        return 1e12
+    if not risultato.success:
+        return 1e12
+    h_finale = risultato.y[1, -1]
+    vh_finale = risultato.y[3, -1]
+    v_target_circolare = velocita_orbitale_target(h_target)
+    termine_h = ((h_finale - h_target) / h_target) ** 2
+    termine_vh = (vh_finale / v_target_circolare) ** 2
+    return termine_h + termine_vh
+
+
+def risolvi_stadio_2_target_quota(
+    m0, spinta, mdot, tf, x0, h0, vx0, vh0, h_target, vh_target, A0, B0
+):
+    """Trova A, B dello Stadio 2 vincolando QUOTA finale e velocita' verticale finale.
+
+    Vedi STATUS.md, Ciclo 10, addendum ("Design finale consolidato"): a
+    differenza di ``risolvi_stadio_2_minimi_quadrati`` (target vx/vh,
+    quota finale libera -- funzione ESISTENTE, lasciata invariata sopra e
+    ancora disponibile per confronto/sensibilita', vedi suo test
+    dedicato), questa funzione vincola quota+verticalita', la coppia di
+    vincoli che identifica davvero il perigeo/apogeo dell'orbita
+    risultante.
+
+    Stesso pattern di doppio guess/diagnostica di robustezza di
+    ``risolvi_stadio_2_minimi_quadrati`` (Nelder-Mead dal guess primario
+    E da un guess perturbato, ``coerenza_multistart`` riportata come
+    diagnostica non bloccante, NON un gate come il ``RuntimeError`` di
+    ``fsolve`` in Step 6 -- vedi docstring di quella funzione per la
+    motivazione completa, identica qui).
+
+    Ritorna
+    -------
+    dict
+        ``{"A": ..., "B": ..., "risultato": <OdeResult>, "residuo_h": ...,
+        "residuo_vh": ..., "residuo_obiettivo": ..., "coerenza_multistart": ...,
+        "A_secondario": ..., "B_secondario": ...}``.
+    """
+    args = (m0, spinta, mdot, tf, x0, h0, vx0, vh0, h_target, vh_target)
+    opzioni = {"xatol": 1e-10, "fatol": 1e-14, "maxiter": 20_000, "maxfev": 20_000}
+
+    ris_primario = minimize(
+        _obiettivo_residuo_quota_verticale, x0=[A0, B0], args=args, method="Nelder-Mead", options=opzioni
+    )
+    A_p, B_p = ris_primario.x
+
+    # Guess perturbato per la diagnostica di robustezza (vedi docstring),
+    # stesso fallback per B0=0.0 gia' usato in risolvi_stadio_2_minimi_quadrati.
+    A0_pert = A0 * 1.3 if A0 != 0.0 else 0.01
+    B0_pert = B0 * 1.3 if B0 != 0.0 else 0.0001
+    ris_secondario = minimize(
+        _obiettivo_residuo_quota_verticale, x0=[A0_pert, B0_pert], args=args, method="Nelder-Mead", options=opzioni
+    )
+    A_s, B_s = ris_secondario.x
+
+    coerenza_multistart = bool(np.allclose([A_p, B_p], [A_s, B_s], rtol=1e-2, atol=1e-4))
+
+    risultato = ge.integra_tangente_lineare(m0, spinta, mdot, A_p, B_p, tf, x0=x0, h0=h0, vx0=vx0, vh0=vh0)
+    h_finale = risultato.y[1, -1]
+    vh_finale = risultato.y[3, -1]
+
+    return {
+        "A": float(A_p),
+        "B": float(B_p),
+        "risultato": risultato,
+        "residuo_h": float(h_finale - h_target),
+        "residuo_vh": float(vh_finale - vh_target),
+        "residuo_obiettivo": float(ris_primario.fun),
+        "coerenza_multistart": coerenza_multistart,
+        "A_secondario": float(A_s),
+        "B_secondario": float(B_s),
+    }
+
+
+def verifica_orbita_stabile(h, vx, vh, bonus_rotazione=0.0):
+    """Verifica se lo stato finale (h, vx, vh) descrive un'orbita ellittica stabile.
+
+    Meccanica orbitale standard per un campo centrale (energia specifica
+    + momento angolare specifico -> semiasse maggiore, eccentricita',
+    perigeo, apogeo). Fonte: Curtis, H.D., *Orbital Mechanics for
+    Engineering Students* (gia' citato dal progetto dallo Step 1 per
+    ``MU_TERRA``/``R_TERRA``), capitoli su energia dell'orbita e momento
+    angolare per il problema dei due corpi::
+
+        r = R_TERRA + h
+        vx_eff = vx + bonus_rotazione                # bonus SOLO sulla componente orizzontale
+        L = r * vx_eff                                # momento angolare specifico
+        E = (vx_eff**2 + vh**2) / 2 - MU_TERRA / r    # energia meccanica specifica
+        a = -MU_TERRA / (2 * E)                       # semiasse maggiore (orbita ellittica, E<0)
+        e = sqrt(1 + 2*E*L**2 / MU_TERRA**2)           # eccentricita'
+        r_perigeo = a * (1 - e); r_apogeo = a * (1 + e)
+
+    ``bonus_rotazione`` (default 0.0, il caso rigoroso dichiarato in
+    CLAUDE.md: nessuna rotazione terrestre) si applica SOLO a ``vx``
+    prima del calcolo -- vedi ``BONUS_ROTAZIONE_TERRESTRE`` in questo
+    modulo per il valore usato nel confronto di sensibilita' con
+    rotazione terrestre (disclaimer CLAUDE.md, sezione aggiunta
+    2026-08-16, rafforzato STATUS.md Ciclo 10).
+
+    Parametri
+    ---------
+    h : float
+        Quota sul livello del mare, m.
+    vx, vh : float
+        Componenti orizzontale/verticale della velocita', m/s.
+    bonus_rotazione : float, opzionale
+        Offset costante (m/s) sommato a ``vx`` prima del calcolo (default
+        0.0, nessun bonus).
+
+    Ritorna
+    -------
+    dict
+        ``{"semiasse_maggiore": ..., "eccentricita": ..., "perigeo": ...,
+        "apogeo": ..., "perigeo_valido": <bool>}``. ``perigeo``/``apogeo``
+        sono QUOTE (m) sul livello del mare (``r_perigeo/apogeo - R_TERRA``),
+        non distanze geocentriche. ``perigeo_valido = perigeo >= 0``
+        (l'orbita risultante non interseca la superficie terrestre).
+    """
+    r = R_TERRA + h
+    vx_eff = vx + bonus_rotazione
+
+    L = r * vx_eff
+    E = (vx_eff**2 + vh**2) / 2.0 - MU_TERRA / r
+    a = -MU_TERRA / (2.0 * E)
+    e = math.sqrt(1.0 + 2.0 * E * L**2 / MU_TERRA**2)
+
+    r_perigeo = a * (1.0 - e)
+    r_apogeo = a * (1.0 + e)
+    perigeo = r_perigeo - R_TERRA
+    apogeo = r_apogeo - R_TERRA
+
+    return {
+        "semiasse_maggiore": a,
+        "eccentricita": e,
+        "perigeo": perigeo,
+        "apogeo": apogeo,
+        "perigeo_valido": bool(perigeo >= 0.0),
+    }
+
+
+def assembla_traiettoria(A0=A0_GUESS_STADIO2_QUOTA, B0=B0_GUESS_STADIO2_QUOTA, h_target=H_TARGET):
     """Assembla la traiettoria completa Stadio 1 (gravity turn) -> Stadio 2 (tangente lineare).
 
-    Vedi docstring di modulo per il confine delle fasi di guida e per la
-    strategia di risoluzione dello Stadio 2.
+    Vedi docstring di modulo per il confine delle fasi di guida.
+    STATUS.md, Ciclo 10 (design finale consolidato): usa di default
+    ``risolvi_stadio_2_target_quota`` (vincola quota finale + velocita'
+    verticale finale, invece del vecchio target vx/vh che lasciava la
+    quota libera -- vedi Ciclo 9 per la scoperta del problema e Ciclo 10
+    per la correzione). ``risolvi_stadio_2_minimi_quadrati`` (Ciclo 7)
+    resta nel modulo invariata, non piu' usata qui di default.
 
     Ritorna
     -------
@@ -433,9 +637,18 @@ def assembla_traiettoria(A0=A0_GUESS_STADIO2, B0=B0_GUESS_STADIO2, h_target=H_TA
         (``OdeResult`` grezzo dell'integrazione finale dello Stadio 2 con
         i coefficienti A, B trovati), le masse di continuita' (effettiva
         E nominale, per il confronto esplicito richiesto dal piano),
-        ``vx_finale``/``vh_finale``/``v_finale``, il target
-        (``vx_target``/``vh_target``) e lo scarto residuo
-        (``residuo_vx``/``residuo_vh``/``residuo_modulo``).
+        ``vx_finale``/``vh_finale``/``v_finale``, il target vx/vh
+        INFORMATIVO (``vx_target``/``vh_target``, velocita' circolare
+        alla quota target -- NON piu' il vincolo attivo del solutore, solo
+        un termine di paragone) con lo scarto residuo corrispondente
+        (``residuo_vx``/``residuo_vh``/``residuo_modulo``, informativo,
+        atteso NON nullo), il NUOVO residuo di quota attivamente
+        vincolato dal solutore (``residuo_h``, atteso vicino a zero), e la
+        verifica di stabilita' orbitale dello stato finale sia SENZA
+        bonus di rotazione terrestre (``orbita_senza_bonus``, caso
+        rigoroso dichiarato in CLAUDE.md) sia CON bonus
+        (``orbita_con_bonus``, sensibilita' esplicita, vedi
+        ``BONUS_ROTAZIONE_TERRESTRE``).
     """
     mdot1 = SPINTA_1_VUOTO / (ISP_1_VUOTO * G0)
 
@@ -469,15 +682,30 @@ def assembla_traiettoria(A0=A0_GUESS_STADIO2, B0=B0_GUESS_STADIO2, h_target=H_TA
     mdot2 = SPINTA_2 / (ISP_2 * G0)
     tf2 = M_PROP_2 / mdot2
 
+    # Target vx/vh INFORMATIVO (velocita' circolare alla quota target):
+    # non e' piu' il vincolo attivo del solutore (Ciclo 10), ma resta
+    # calcolato e riportato per confronto -- vedi ``residuo_vx``/
+    # ``residuo_vh``/``residuo_modulo`` sotto, tutti informativi.
     vx_target = velocita_orbitale_target(h_target)
     vh_target = 0.0
 
-    soluzione_2 = risolvi_stadio_2_minimi_quadrati(
-        m_ignizione_2_effettiva, SPINTA_2, mdot2, tf2, x1, h1, vx1, vh1, vx_target, vh_target, A0, B0
+    soluzione_2 = risolvi_stadio_2_target_quota(
+        m_ignizione_2_effettiva, SPINTA_2, mdot2, tf2, x1, h1, vx1, vh1, h_target, vh_target, A0, B0
     )
     risultato_2 = soluzione_2["risultato"]
+    h_finale = risultato_2.y[1, -1]
     vx_finale = risultato_2.y[2, -1]
     vh_finale = risultato_2.y[3, -1]
+
+    # Verifica di stabilita' orbitale dello stato finale (STATUS.md,
+    # Ciclo 10): sia SENZA bonus di rotazione terrestre (caso rigoroso
+    # dichiarato in CLAUDE.md, ci si aspetta perigeo_valido=False con
+    # questi dati) sia CON bonus (sensibilita' esplicita, ci si aspetta
+    # perigeo_valido=True) -- entrambi riportati, nessuno nascosto.
+    orbita_senza_bonus = verifica_orbita_stabile(h_finale, vx_finale, vh_finale)
+    orbita_con_bonus = verifica_orbita_stabile(
+        h_finale, vx_finale, vh_finale, bonus_rotazione=BONUS_ROTAZIONE_TERRESTRE
+    )
 
     return {
         "risultato_1": risultato_1,
@@ -494,17 +722,22 @@ def assembla_traiettoria(A0=A0_GUESS_STADIO2, B0=B0_GUESS_STADIO2, h_target=H_TA
         "m_ignizione_2_nominale": m_ignizione_2_nominale,
         "mdot2": mdot2,
         "tf2": tf2,
+        "h_target": h_target,
         "A": soluzione_2["A"],
         "B": soluzione_2["B"],
         "coerenza_multistart": soluzione_2["coerenza_multistart"],
         "vx_target": vx_target,
         "vh_target": vh_target,
+        "h_finale": float(h_finale),
         "vx_finale": float(vx_finale),
         "vh_finale": float(vh_finale),
         "v_finale": float(math.hypot(vx_finale, vh_finale)),
-        "residuo_vx": soluzione_2["residuo_vx"],
-        "residuo_vh": soluzione_2["residuo_vh"],
-        "residuo_modulo": soluzione_2["residuo_modulo"],
+        "residuo_vx": float(vx_finale - vx_target),
+        "residuo_vh": float(vh_finale - vh_target),
+        "residuo_modulo": float(math.hypot(vx_finale - vx_target, vh_finale - vh_target)),
+        "residuo_h": soluzione_2["residuo_h"],
+        "orbita_senza_bonus": orbita_senza_bonus,
+        "orbita_con_bonus": orbita_con_bonus,
     }
 
 
@@ -637,8 +870,18 @@ def scompone_perdite(assemblaggio, n_punti_verticale=5000, n_punti_gravity_turn=
     }
 
 
-def esegui_validazione(A0=A0_GUESS_STADIO2, B0=B0_GUESS_STADIO2):
+def esegui_validazione(A0=A0_GUESS_STADIO2_QUOTA, B0=B0_GUESS_STADIO2_QUOTA):
     """Esegue l'intera pipeline di validazione e riporta tutti i numeri rilevanti.
+
+    Nota (pulizia Ciclo 10): il default deve usare i guess tarati per
+    l'obiettivo quota/verticalita' (``*_QUOTA``), coerente con
+    ``assembla_traiettoria`` che dal Ciclo 10 usa
+    ``risolvi_stadio_2_target_quota`` di default. Prima di questa
+    correzione i default erano i vecchi guess ``A0_GUESS_STADIO2``/
+    ``B0_GUESS_STADIO2`` (tarati per l'obiettivo vx/vh, non piu' quello
+    di default) — l'ottimizzatore convergeva comunque allo stesso punto
+    (verificato dal critic-ingegnere), quindi non era un bug numerico,
+    ma il nome/intento del parametro non corrispondeva al suo uso reale.
 
     Ritorna
     -------

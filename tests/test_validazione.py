@@ -266,3 +266,123 @@ def test_nessun_nan_inf(assemblaggio, perdite):
 
     for chiave in ("vx_finale", "vh_finale", "v_finale", "residuo_modulo", "A", "B"):
         assert np.isfinite(assemblaggio[chiave])
+
+
+# ---------------------------------------------------------------------------
+# 7. Ciclo 10: correzione del target dello Stadio 2 (quota + verticalita'
+#    invece di vx/vh con quota libera) e verifica di stabilita' orbitale.
+# ---------------------------------------------------------------------------
+
+
+def test_verifica_orbita_stabile_regressione_oracoli_noti():
+    # Oracolo di regressione (STATUS.md, Ciclo 9 e Ciclo 10, addendum
+    # "design finale consolidato", punto 3): valori gia' validati
+    # indipendentemente due volte (dall'orchestratore, poi riconfermati
+    # nell'indagine numerica pre-piano del Ciclo 10). Tolleranza stretta
+    # (1 metro assoluto su grandezze dell'ordine di decine/centinaia di
+    # km) -- un fallimento qui e' un bug nella formula, non un caso limite.
+
+    # Stato vecchio target (Ciclo 7/9): quota libera, vx/vh vincolati.
+    r_vecchio = val.verifica_orbita_stabile(148050.2, 7755.084, -8.241)
+    assert r_vecchio["perigeo"] == pytest.approx(-62501.27, abs=1.0)  # ~= -62.50 km
+    assert r_vecchio["apogeo"] == pytest.approx(148270.77, abs=1.0)  # ~= 148.27 km
+    assert r_vecchio["perigeo_valido"] is False
+
+    # Stato nuovo target (Ciclo 10): quota vincolata a 200 km esatti, vh=0.
+    r_nuovo = val.verifica_orbita_stabile(200000.0, 7721.045, 0.0)
+    assert r_nuovo["perigeo"] == pytest.approx(-22774.60, abs=1.0)  # ~= -22.77/-22.78 km
+    assert r_nuovo["apogeo"] == pytest.approx(200000.0, abs=1.0)
+    assert r_nuovo["perigeo_valido"] is False
+
+
+def test_target_quota_verticale_raggiunto_entro_tolleranza_stretta(assemblaggio):
+    # Il NUOVO obiettivo (Ciclo 10) vincola ATTIVAMENTE quota finale e
+    # velocita' verticale finale (a differenza del vecchio target vx/vh,
+    # che lasciava la quota libera). Verificato che il solutore converge
+    # a precisione prossima a quella di macchina (residuo_h ~1e-6 m,
+    # vh_finale ~1e-8 m/s, misurato in fase di sviluppo): tolleranza qui
+    # fissata con ampio margine sopra il valore osservato (1 m, 1 mm/s),
+    # non artificialmente stretta ne' larga.
+    assert assemblaggio["h_finale"] == pytest.approx(assemblaggio["h_target"], abs=1.0)
+    assert abs(assemblaggio["residuo_h"]) < 1.0  # metri
+    assert abs(assemblaggio["vh_finale"]) < 1e-3  # m/s
+
+
+def test_perigeo_non_valido_senza_bonus_valido_con_bonus_rotazione(assemblaggio):
+    # Questi due controlli sono ESPLICITAMENTE collegati (non due casi
+    # isolati): il secondo SPIEGA E CHIUDE il primo. Con lo stato finale
+    # reale della traiettoria Falcon 9 di questo modulo, il modello
+    # rigoroso del progetto (nessuna rotazione terrestre, CLAUDE.md,
+    # riga "Dinamica") produce un perigeo leggermente sotto la superficie
+    # (~-21/-23 km) -- NON un'orbita stabile in senso stretto. Sommando
+    # il bonus di velocita' dovuto alla rotazione terrestre per un sito
+    # equatoriale/subtropicale come Cape Canaveral (28.5°N,
+    # BONUS_ROTAZIONE_TERRESTRE ~= 408.7 m/s, gia' quantificato nel
+    # disclaimer di CLAUDE.md), lo stesso identico stato diventa
+    # un'orbita ellittica stabile con perigeo sopra la superficie: il
+    # deficit trovato senza bonus (~67 m/s in vx, vedi
+    # ``residuo_vx``/CLAUDE.md) e' interamente coperto e superato dal
+    # bonus (408.7 m/s > 67 m/s) -- non un limite aperto del modello, una
+    # conferma quantitativa di coerenza (vedi STATUS.md, Ciclo 10).
+    assert assemblaggio["orbita_senza_bonus"]["perigeo_valido"] is False
+    assert assemblaggio["orbita_con_bonus"]["perigeo_valido"] is True
+
+    # Il deficit di velocita' (senza bonus) e' interamente coperto dal
+    # bonus di rotazione: verifica numerica diretta della relazione
+    # causale appena descritta, non solo dei due booleani.
+    deficit_vx = abs(assemblaggio["residuo_vx"])
+    assert val.BONUS_ROTAZIONE_TERRESTRE > deficit_vx
+
+
+def test_identita_chiusura_perdite_regge_con_la_nuova_traiettoria(perdite):
+    # Verifica ESPLICITA (non assunta) che la tolleranza di chiusura di
+    # ``scompone_perdite`` regga con la nuova forma di traiettoria
+    # (Ciclo 10: A, B diversi, h(t) del segmento tangente lineare ora
+    # converge monotonamente al target invece di salire e ridiscendere).
+    # Misurato in fase di sviluppo: residuo_chiusura ~1.5e-4 m/s
+    # (~1.9e-8 relativo) -- stesso ordine di grandezza del Ciclo 7/9, la
+    # griglia di default di ``scompone_perdite`` (5000/20000/20000 punti)
+    # NON necessita retaratura. Stessa tolleranza gia' usata da
+    # ``test_identita_chiusura_perdite_tolleranza_stretta`` sopra,
+    # ripetuta qui come check dedicato e commentato per il Ciclo 10.
+    assert abs(perdite["residuo_chiusura"]) < 0.01
+    assert abs(perdite["residuo_chiusura_relativo"]) < 1e-6
+
+
+def test_risolvi_stadio_2_minimi_quadrati_ancora_coperta_direttamente(assemblaggio):
+    # Ciclo 10: ``assembla_traiettoria`` non usa piu' di default
+    # ``risolvi_stadio_2_minimi_quadrati`` (sostituita da
+    # ``risolvi_stadio_2_target_quota``). La funzione vecchia resta pero'
+    # nel modulo INVARIATA (vincolo esplicito del piano) e va quindi
+    # continuare a esercitarla direttamente, non lasciarla come codice
+    # morto non testato. Riusa lo stato di handoff Stadio1->Stadio2 REALE
+    # (identico per costruzione: lo Stadio 1/gravity turn non e' toccato
+    # da questo ciclo) e il vecchio target vx/vh, con la stessa
+    # tolleranza attesa gia' documentata nel Ciclo 7 (~30-40 m/s di
+    # scarto residuo, quota finale NON vincolata/libera).
+    vx_target = val.velocita_orbitale_target()
+    vh_target = 0.0
+    soluzione = val.risolvi_stadio_2_minimi_quadrati(
+        assemblaggio["m_ignizione_2_effettiva"],
+        val.SPINTA_2,
+        assemblaggio["mdot2"],
+        assemblaggio["tf2"],
+        assemblaggio["x1"],
+        assemblaggio["h1"],
+        assemblaggio["vx1"],
+        assemblaggio["vh1"],
+        vx_target,
+        vh_target,
+        val.A0_GUESS_STADIO2,
+        val.B0_GUESS_STADIO2,
+    )
+    assert soluzione["coerenza_multistart"] is True
+    assert soluzione["residuo_modulo"] == pytest.approx(34.4, abs=2.0)
+
+    # La quota finale con QUESTO vecchio solutore resta libera (non
+    # vincolata): con lo stato reale converge a ~148 km (ben lontana dal
+    # target di 200 km), confermando esplicitamente perche' serviva la
+    # correzione del Ciclo 10 (non solo dichiarato, verificato qui).
+    h_finale_vecchio = soluzione["risultato"].y[1, -1]
+    assert h_finale_vecchio == pytest.approx(148_050.2, rel=1e-3)
+    assert h_finale_vecchio < 0.9 * val.H_TARGET

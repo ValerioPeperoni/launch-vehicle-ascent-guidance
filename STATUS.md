@@ -39,7 +39,29 @@
     vicini che devono concordare, altrimenti RuntimeError esplicito) è
     probabilmente riusabile qui, non da reinventare — verificarlo
     esplicitamente prima di progettare un meccanismo nuovo da zero.
-- [ ] Step 9: Visualizzazione (traiettoria numerica + animazione)
+- [x] Step 9: Visualizzazione (traiettoria numerica + animazione)
+  - **Scoperta 2026-08-17, RISOLTA al Ciclo 10 (2026-08-18):**
+    ispezionando visivamente i grafici prodotti da questo step, emerso
+    che la quota nel Segmento 2 dello Step 7 sale a un massimo di
+    ~170km poi RIDISCENDE a ~148km a fine bruciamento (vh diventa
+    negativo). Approfondito dal critic-ingegnere e verificato
+    indipendentemente dall'orchestratore (leggi orbitali standard,
+    nessuna nuova fisica): lo stato finale della traiettoria Step 7
+    (h=148.05km, vx=7755.08, vh=-8.24 m/s) NON corrisponde a un'orbita
+    LEO stabile — perigeo calcolato ≈-62.5 km (sotto la superficie
+    terrestre), apogeo ≈148.3 km. **Risolto al Ciclo 10:** risolutore
+    corretto per vincolare quota+verticalità (non più solo velocità
+    orizzontale), scarto ridotto a -22.8km; esplorate e scartate con
+    evidenza numerica altre due leve (obiettivo a velocità circolare
+    auto-consistente: -15.9km, ancora negativo; tempo di bruciamento
+    libero come terza incognita: converge sempre al bruciamento
+    completo, nessun miglioramento); **chiuso definitivamente
+    verificando che il deficit residuo (~67 m/s) è interamente spiegato
+    dal bonus di rotazione terrestre (409 m/s) già escluso per scope fin
+    dall'inizio — con quel bonus il perigeo diventa +200km esatto.**
+    Verificato due volte in modo indipendente (orchestratore +
+    critic-ingegnere). Dettaglio completo: STATUS.md Ciclo 10,
+    disclaimer aggiornato in CLAUDE.md (2026-08-18).
 - [ ] Step 10: Validazione e documentazione dei limiti (VALIDATION.md, confronto concettuale con i progetti di riferimento)
 - [ ] Step 11: Pulizia, documentazione, README, preparazione per GitHub
 
@@ -2508,3 +2530,452 @@ avrebbe gonfiato l'errore per un artefatto di reset del tempo (report
 di un ~65% invece del 13.85% reale) — corretto prima di scrivere codice.
 Prossimo step proposto: Step 9 (visualizzazione, traiettoria numerica +
 animazione).
+
+---
+
+### 2026-08-16 — Ciclo 9 (piano scritto direttamente dall'orchestratore)
+
+**Nota di processo:** pipeline snellita confermata: scrivo io il piano,
+salto `planner`/`optimizer`/`reporter`, mantengo `reviewer` e
+`critic-ingegnere`. Natura diversa dai cicli precedenti: nessuna nuova
+fisica, solo visualizzazione di dati già calcolati e verificati.
+
+**Step:** 9 — Visualizzazione (traiettoria numerica + animazione).
+
+**Dataset scelto:** la traiettoria completa dello Step 7
+(`lanciatore.validazione.esegui_validazione()`/`assembla_traiettoria()`)
+— il risultato più completo del progetto (Falcon 9, gravity turn +
+tangente lineare fino a orbita). Riuso totale, nessuna nuova
+integrazione.
+
+#### 1. Design
+
+Nuovo modulo `lanciatore/visualizzazione.py` (nessuna modifica a moduli
+esistenti):
+1. `estrai_serie_temporali(...)`: converte i risultati grezzi di
+   `assembla_traiettoria()` in serie temporali concatenate a TEMPO
+   ASSOLUTO CONTINUO attraverso le 3 fasi (Fase A verticale, Fase B
+   gravity turn, tangente lineare — sommando gli offset, non
+   resettando l'orologio, stesso principio corretto dal reviewer allo
+   Step 8), con marcatori espliciti delle transizioni di fase.
+2. `grafico_quota_velocita_tempo(...)`: h(t), v(t) modulo, m(t) —
+   sottografici con linee verticali alle transizioni, salvato PNG.
+3. `grafico_traiettoria(...)`: piano (x,h), salvato PNG.
+4. `anima_traiettoria(...)`: `FuncAnimation` su (x,h), salvata GIF via
+   `PillowWriter` (Pillow già installato, nessuna nuova dipendenza).
+5. Riepilogo numerico testuale (delta-v ideale/raggiunto, scomposizione
+   perdite — riusa `calcola_delta_v_ideale`/`scompone_perdite`, GIA'
+   calcolati e verificati allo Step 7, non ricalcolati qui).
+
+Output in `output/` (nuova cartella, aggiunta a `.gitignore` — artefatti
+rigenerabili, stesso trattamento di `venv/`).
+
+#### 2. Criteri di verifica
+
+1. Serie temporali estratte: stessa lunghezza dei dati sorgente, tempo
+   monotono crescente attraverso le transizioni (continuità, non reset).
+2. Marcatori di transizione coerenti con gli eventi reali (es. fine
+   Fase A = evento di kick).
+3. Funzioni di grafico/animazione girano senza eccezioni, file salvati
+   non vuoti.
+4. **Ispezione visiva effettiva** (io, non solo test automatici): genero
+   i grafici, li guardo (Read su PNG) prima di dichiarare concluso,
+   li invio all'utente (SendUserFile).
+
+**Prossimo:** passare al sub-agente reviewer per il controllo critico
+di questo piano, poi al coder.
+
+#### 3. Addendum (reviewer) — recepito prima di passare al coder
+
+Verdetto reviewer: **da rivedere** (non problemi di fisica, ma
+ambiguità concrete di estrazione dati che rischiano un bug silenzioso
+in un grafico "plausibile a occhio ma quantitativamente sbagliato").
+Verificato nel codice riga per riga. Risolto:
+
+**1. Formula esplicita per l'offset di tempo** (i tre `OdeResult` sono
+indipendenti, ciascuno riparte da `t=0`):
+```
+offset_B = fase_verticale.t[-1]
+offset_tangente = offset_B + gravity_turn.t[-1]
+```
+
+**2. Tabella esplicita di mapping stato→grandezza, DIVERSA per ogni
+fase (non un indice uniforme):**
+
+| Fase | Stato | h | v (modulo) | m | x |
+|---|---|---|---|---|---|
+| Fase A (verticale) | `[h,v,m]` | idx0 | idx1 (diretto) | idx2 | **non esiste, sintetizzare array di zeri** |
+| Fase B (gravity turn) | `[x,h,v,gamma,m]` | idx1 | idx2 (diretto) | idx4 | idx0 |
+| Tangente lineare | `[x,h,vx,vh,m]` | idx1 | **`sqrt(vx**2+vh**2)`, idx2/idx3** | idx4 | idx0 |
+
+**3. `x` per la Fase A non esiste nei dati grezzi:** sintetizzare
+esplicitamente `np.zeros_like(fase_verticale.t)` (ascesa verticale pura,
+x=0 per costruzione) — NON un `IndexError`/riuso implicito di un'altra
+colonna.
+
+**4. Nuovo criterio di verifica quantitativo (chiusura con i numeri già
+verificati allo Step 7, non solo ispezione visiva):** il valore finale
+della serie concatenata di velocità-modulo, quota, e massa deve
+coincidere ENTRO TOLLERANZA NUMERICA con
+`assemblaggio['v_finale']`/`h` finale di `risultato_2`/`m` finale di
+`risultato_2` (già calcolati e verificati indipendentemente dal
+critic-ingegnere allo Step 7) — e la massa iniziale di ciascun segmento
+deve coincidere con `m1_effettiva`/`m_ignizione_2_effettiva`. Non un
+nuovo delta-v da validare, ma una chiusura numerica tra dati grezzi già
+validati e serie derivata per il plotting.
+
+**5. Discontinuità di massa allo staging (Stadio1→Stadio2): comportamento
+ATTESO, non un bug da "correggere".** Concatenando gli array grezzi così
+come sono, la serie `m(t)` mostra correttamente un salto verso il basso
+nel punto di transizione (nessuna interpolazione). Dichiarato
+esplicitamente per il coder: il salto va PRESERVATO nel grafico, non
+smussato.
+
+**Prossimo:** coder implementa secondo questo design consolidato.
+
+#### 4. Esito ciclo (coder + critic-ingegnere, pipeline snellita)
+
+- **coder**: implementato `lanciatore/visualizzazione.py` +
+  `tests/test_visualizzazione.py` secondo il design consolidato.
+  `output/` aggiunto a `.gitignore`. 86/86 test verdi (73 pregressi + 13
+  nuovi). 3 file generati: `output/quota_velocita_tempo.png`,
+  `output/traiettoria.png`, `output/traiettoria.gif`. Segnalata
+  un'imprecisione di formulazione nell'addendum (punto 4, "massa
+  iniziale di ciascun segmento" — `m1_effettiva` è in realtà la massa
+  FINALE del gravity turn) risolta con l'unica lettura sensata
+  (verifica dei due lati della discontinuità), non ignorata.
+- **Ispezione visiva (io):** grafici corretti — quota/velocità/massa
+  monotone come atteso nella Fase A/B, salto di massa allo staging
+  visibile come gradino netto, traiettoria (x,h) con curva del gravity
+  turn che si raddrizza dopo lo staging. **Notato un dettaglio nel
+  grafico h(t) non ovvio dai soli numeri aggregati dello Step 7: la
+  quota sale a ~170km poi ridiscende a ~148km entro fine bruciamento
+  del Segmento 2** — verificato non essere un bug di visualizzazione
+  (dati confermati identici a `validazione.py`, non toccato).
+- **critic-ingegnere**: tutti i criteri dell'addendum verificati con
+  ricalcolo indipendente (mapping per fase, offset tempo, salto di
+  massa esatto -25600kg, chiusura quantitativa esatta). 86/86
+  confermati. **Ha approfondito la scoperta della quota discendente
+  fino alle sue conseguenze fisiche**: propagando lo stato finale dello
+  Step 7 con la meccanica orbitale standard (nessuna nuova fisica),
+  l'orbita osculatrice ha perigeo calcolato a **-62.5 km** (sotto la
+  superficie terrestre) — **NON un'orbita LEO stabile**, una traiettoria
+  che rientrerebbe prima di completare un giro. **Confermato
+  indipendentemente anche da me** (Bash, leggi orbitali standard:
+  E=-31 073 249 J/kg, semiasse maggiore=6413.9km, eccentricità=0.01643,
+  perigeo=-62.50km, apogeo=148.27km — coincide esattamente col calcolo
+  del critic-ingegnere). Causa: il risolutore dello Step 7
+  (`risolvi_stadio_2_minimi_quadrati`) vincola solo velocità finale, non
+  quota — scelta di scope esplicita di quello step ("l'altitudine
+  finale resta libera"), che però ha una conseguenza più seria di quanto
+  notato allora: il check delta-v (scalare aggregato) non intercetta
+  un'orbita non valida.
+- **Pulizia (io, non optimizer):** codice già ben strutturato, nessuna
+  correzione necessaria.
+
+**Step 9: COMPLETATO nello scope dichiarato** (grafici e animazione
+fedeli ai dati, 86/86 test, output generato e ispezionato). **Ha però
+prodotto la scoperta più importante del progetto sul piano dei
+risultati** (non solo del processo): la validazione Falcon 9 dello Step
+7, per quanto passi il check delta-v obbligatorio, non produce
+un'orbita LEO effettivamente stabile. Decisione su come/quando
+affrontarlo lasciata all'utente (vedi nota nella roadmap sopra) —
+possibilità: (a) risolvere ora, tornando allo Step 7 per vincolare
+anche la quota nel solutore (probabilmente serve un terzo grado di
+libertà, es. `tf` libero); (b) documentarlo come limite noto nello
+Step 10 (già dedicato a "validazione e documentazione dei limiti") e
+procedere; (c) altro. Prossimo step proposto: da confermare con
+l'utente alla luce di questa scoperta.
+
+---
+
+### 2026-08-17 — Ciclo 10 (correzione mirata a Step 7, scritta
+direttamente dall'orchestratore, indagine numerica pre-piano)
+
+**Decisione dell'utente:** tornare allo Step 7 e correggere il
+risolutore dello Stadio 2 perché vincoli **quota finale = target** e
+**componente verticale della velocità finale = 0**, non più magnitudine/
+componente orizzontale della velocità. Verificare poi che lo stato
+finale dia un'orbita reale (perigeo sopra la superficie) con lo stesso
+calcolo di meccanica orbitale già usato per la diagnosi. Riverificare
+Step 8 e 9 dopo la correzione.
+
+#### 1. Indagine numerica pre-piano (fatta prima di scrivere il piano,
+stesso principio già seguito per la scoperta del termine centripeto)
+
+**Step 8 confermato indipendente da `validazione.py`:** verificato via
+grep degli import di `staging_esoatmosferico.py`/`test_staging_esoatmosferico.py`
+— nessun riferimento a `validazione`. Scenario autocontenuto (m0=1000,
+parametri di test propri). Non necessita modifiche, solo riconferma
+finale della suite.
+
+**Nuovo obiettivo testato numericamente:** `risolvi_stadio_2_minimi_quadrati`
+deve minimizzare `(h(tf)-h_target)² + vh(tf)²` invece di
+`(vx(tf)-vx_target)² + (vh(tf)-vh_target)²`. Testato con lo stato di
+handoff reale (identico a prima, Stadio 1/gravity turn non tocco):
+`x1=113793.17, h1=78943.84, vx1=2726.90, vh1=1169.41, m_ignizione2=119370.0`.
+
+**Risultato (guess `A0=0.3, B0=0.0`, converge in modo pulito — altri
+guess provati falliscono per `ValueError` di dominio durante
+l'esplorazione, comportamento già noto e gestito dal fallback
+residuo-costante di Ciclo 7):** `A=0.24410, B=-0.000522`,
+`h_finale=200.000 km` (esatto), `vh_finale≈0`, **`vx_finale=7721.04 m/s`**
+(contro `vx_orbitale=7788.49 m/s` — 67.4 m/s in meno, il vincolo di
+quota "consuma" margine di velocità che prima andava tutto su vx).
+
+**Verifica orbitale (stessa meccanica standard già usata per la
+diagnosi, nessuna nuova fisica):** `a=6459.61 km`, `ecc=0.017244`,
+**perigeo=-22.78 km, apogeo=200.00 km**. **Migliore della versione
+precedente (-62.5 km→-22.8 km, -63% di scarto) ma ANCORA NEGATIVO —
+non ancora un'orbita stabile.**
+
+**Esplorazione aggiuntiva (per informare l'utente, non per scegliere
+unilateralmente un target diverso):** ripetuto lo stesso calcolo per
+`h_target` da 150 a 200 km — il perigeo resta negativo su tutto
+l'intervallo (minimo scarto ≈-15 km attorno a 180-190 km, non
+sostanzialmente migliore di -22.8 km a 200 km). **Non è un problema di
+quale quota target scegliere: è un vero scarto di budget Δv/energia
+dello Stadio 2 con questo `tf` fisso e questo stato di handoff** — la
+stessa cosa già segnalata come "margine stretto" nel disclaimer
+CLAUDE.md del check delta-v (38 m/s sopra il minimo), ora quantificata
+in modo più diretto e fisico (mancano di ordine 20-25 km di perigeo,
+non solo m/s aggregati).
+
+#### 2. Design della correzione
+
+- `lanciatore/validazione.py`: nuova funzione obiettivo
+  `_obiettivo_residuo_quota_verticale` (minimizza `(h(tf)-h_target)² +
+  vh(tf)²`), affiancata a quella esistente (NON sostituita — la vecchia
+  resta disponibile per confronto/sensibilità, marcata esplicitamente
+  come "target precedente, lasciava la quota libera"). `risolvi_stadio_2_minimi_quadrati`
+  aggiornata per accettare il nuovo target (h_target invece di
+  vx_target) con lo stesso pattern di doppio guess/diagnostica di
+  robustezza già presente.
+- Nuova funzione `verifica_orbita_stabile(h_finale, vx_finale, vh_finale)`:
+  calcola semiasse maggiore, eccentricità, perigeo, apogeo con la
+  meccanica orbitale standard (energia specifica + momento angolare,
+  MU_TERRA/R_TERRA già citati) — riusabile anche in step futuri (es.
+  Step 10). Ritorna esplicitamente se il perigeo è sopra la superficie
+  (`perigeo_valido: bool`), senza nascondere il caso negativo.
+- `assembla_traiettoria`: aggiornata per usare il nuovo target di
+  default, riporta ESPLICITAMENTE nel risultato sia il vecchio residuo
+  (vx) sia il nuovo (h), e il risultato di `verifica_orbita_stabile`.
+- **Nessuna modifica a `lanciatore/guida_esoatmosferica.py`,
+  `lanciatore/guida.py`, `lanciatore/staging_esoatmosferico.py`,
+  `lanciatore/staging.py`** — solo `validazione.py`.
+
+#### 3. Criteri di verifica
+
+1. Nuovo target (h,vh) raggiunto entro tolleranza stretta esplicita.
+2. `verifica_orbita_stabile` applicata allo stato finale — risultato
+   riportato ESPLICITAMENTE (perigeo negativo o positivo, non nascosto).
+3. Δv ideale totale (Step 7, invariato — non dipende dal target dello
+   Stadio 2) resta in 9.1-10.0 km/s, riconfermato non ricalcolato.
+4. **Step 8**: nessuna modifica necessaria (confermato indipendente),
+   solo riconferma che la sua suite resta verde.
+5. **Step 9**: `visualizzazione.py` consuma `assembla_traiettoria()`
+   dinamicamente (nessun valore hardcoded verificato al Ciclo 9) — atteso
+   che i test di chiusura quantitativa restino verdi automaticamente
+   con i nuovi numeri, MA i 3 file di output (PNG×2 + GIF) vanno
+   RIGENERATI (i vecchi mostrano la traiettoria col vecchio target) e
+   re-ispezionati.
+6. Suite completa verde.
+
+**Onestà del risultato atteso:** il perigeo resta negativo
+(-22.8 km) anche con la correzione. Questo va riportato esplicitamente
+all'utente come esito, non nascosto né presentato come "risolto" — la
+correzione è comunque quella concettualmente giusta (vincolare quota e
+verticalità invece di lasciare la quota libera), e riduce lo scarto in
+modo sostanziale, ma non lo azzera con questa configurazione di
+veicolo/target/tf.
+
+**Prossimo:** reviewer sul design, poi coder.
+
+#### 4. Addendum (reviewer + tre round di indagine numerica con l'utente)
+— design finale, recepito prima del coder
+
+**Verdetto reviewer: da rivedere.** Trovato un punto concettuale
+importante: con `h_target` fissata e `vh=0`, quel punto è
+l'**APOGEO** dell'orbita (perché il semiasse maggiore risultante `a`
+è minore del raggio target), non il perigeo — il vincolo scelto non
+controlla affatto la grandezza che si vuole validare. Questo spiega
+perché lo sweep di `h_target` (150-200km) non cambiava molto il
+perigeo. Altri problemi del reviewer: formule di `verifica_orbita_stabile`
+da esplicitare con fonte, test di regressione contro i numeri già
+noti, evitare dead code sulla vecchia funzione obiettivo, normalizzare
+i termini dell'obiettivo (metri² vs (m/s)² altrimenti mal
+condizionato), rivedere la tolleranza di chiusura di `scompone_perdite`
+con la nuova forma di traiettoria.
+
+**Tre round di indagine numerica aggiuntiva con l'utente (tutti fatti
+PRIMA di scrivere il design finale):**
+
+1. **Obiettivo auto-consistente** (velocità circolare sulla quota
+   EFFETTIVAMENTE raggiunta, non fissata a priori — l'alternativa
+   proposta dal reviewer): testato, converge a perigeo=-15.86km — il
+   migliore trovato con target fisso, ma ancora negativo.
+2. **`tf` reso libero** (terza incognita, sistema A/B/tf a 3 equazioni
+   invece di 2 sovradeterminate) su richiesta esplicita dell'utente:
+   testato con `fsolve` e `minimize`, **converge sempre a
+   `tf≈tf2_max`** (bruciamento completo, 322.38s) — l'ottimizzatore
+   vuole già tutto il propellente disponibile. **`tf` libero NON aiuta:
+   conferma che è un vero deficit di propellente/energia, non un
+   problema di formulazione del target o di tempistica.**
+3. **Sweep del payload** (per completezza, non per scegliere
+   unilateralmente): a payload=22800kg (max dichiarato) perigeo=-21km;
+   a payload=20000kg (-12%) perigeo=+199km (quasi circolare); resta
+   valido fino a ~7500kg, degrada di nuovo sotto 5000kg.
+4. **Bonus di rotazione terrestre** (409 m/s, già quantificato nel
+   disclaimer CLAUDE.md dal Ciclo 7) su richiesta esplicita
+   dell'utente: aggiunto post-hoc a `vx_finale` (stesso principio con
+   cui si applica realmente — offset costante di velocità inerziale
+   dovuto al sito di lancio in rotazione, non richiede rieseguire la
+   traiettoria), **il perigeo passa da -21km a +199.9km** — il deficit
+   trovato (67.4 m/s in vx) è **interamente coperto e superato** dal
+   bonus (408.74 m/s, con margine di 341.3 m/s, motivo per cui
+   l'orbita risultante diventa ellittica, apogeo ~1495km, se non si
+   ribilancia anche il target).
+
+**Decisione finale dell'utente:** implementare il fix richiesto
+originariamente (target quota+vh=0, NON l'obiettivo auto-consistente,
+NON `tf` libero — nessuno dei due migliora sostanzialmente il
+risultato), **payload al valore massimo dichiarato (22800kg, nessun
+aggiustamento)**, e **documentare esplicitamente che il perigeo
+residuo (~-21/-23km) è interamente spiegato dal bonus di rotazione
+terrestre già escluso per scope fin dall'inizio del progetto** — non
+un limite aperto, una conferma quantitativa di coerenza del modello.
+
+**Design finale consolidato per `lanciatore/validazione.py`:**
+
+1. **Nuova coppia di funzioni, la vecchia resta invariata e testata
+   separatamente (nessun dead code, reviewer punto 4):**
+   `_obiettivo_residuo_quota_verticale(coefficienti, m0, spinta, mdot,
+   tf, x0, h0, vx0, vh0, h_target, vh_target)` — obiettivo
+   NORMALIZZATO (reviewer punto 6):
+   `((h(tf)-h_target)/h_target)**2 + (vh(tf)/v_target_circolare)**2`
+   dove `v_target_circolare = sqrt(MU_TERRA/(R_TERRA+h_target))` (per
+   dare scala fisicamente sensata al termine di velocità). Fallback
+   ValueError→1e12 stesso principio già stabilito.
+   `risolvi_stadio_2_target_quota(...)` — stesso pattern di doppio
+   guess/diagnostica di `risolvi_stadio_2_minimi_quadrati` (che RESTA
+   nel modulo, non toccata, usata da un proprio test standalone per
+   restare "raggiungibile").
+2. **`verifica_orbita_stabile(h, vx, vh, bonus_rotazione=0.0)`** — nuova
+   funzione, riusabile. Formule esplicite (fonte: Curtis, *Orbital
+   Mechanics for Engineering Students*, già citato dal progetto dallo
+   Step 1 per MU_TERRA/R_TERRA):
+   ```
+   r = R_TERRA + h
+   vx_eff = vx + bonus_rotazione   # bonus applicato SOLO alla componente orizzontale
+   L = r * vx_eff                  # momento angolare specifico
+   E = (vx_eff**2 + vh**2)/2 - MU_TERRA/r   # energia specifica
+   a = -MU_TERRA/(2*E)             # semiasse maggiore
+   e = sqrt(1 + 2*E*L**2/MU_TERRA**2)   # eccentricità
+   r_perigeo = a*(1-e); r_apogeo = a*(1+e)
+   ```
+   Ritorna dict con `semiasse_maggiore`, `eccentricita`, `perigeo`
+   (quota, m), `apogeo` (quota, m), `perigeo_valido` (bool,
+   `perigeo >= 0`). Parametro opzionale `bonus_rotazione` (default 0,
+   il caso rigoroso "come dichiarato in CLAUDE.md, niente rotazione
+   terrestre"; passare `408.74` per la sensibilità con rotazione).
+3. **Test di regressione (reviewer punto 3, oracolo dai numeri già
+   due volte validati indipendentemente al Ciclo 9):**
+   `verifica_orbita_stabile(148050.2, 7755.084, -8.241)` deve dare
+   perigeo≈-62.50km, apogeo≈148.27km (stato vecchio target);
+   `verifica_orbita_stabile(200000.0, 7721.045, 0.0)` deve dare
+   perigeo≈-22.78km, apogeo≈200.00km (stato nuovo target, valori
+   dell'indagine pre-piano dell'orchestratore, guess pulito
+   `A0=0.3,B0=0.0`, convergenza a precisione di macchina `fun=2.4e-14`).
+4. **`assembla_traiettoria`**: passa a usare
+   `risolvi_stadio_2_target_quota` di default. Riporta ESPLICITAMENTE
+   nel risultato sia il residuo vecchio (vx) sia il nuovo (h), più
+   `verifica_orbita_stabile(...)` SENZA bonus (caso rigoroso, ci si
+   aspetta `perigeo_valido=False`) E con bonus (`bonus_rotazione=408.74`,
+   ci si aspetta `perigeo_valido=True`) — entrambi nel dict di ritorno,
+   nessuno nascosto.
+5. **Test esplicito che documenta il limite come "spiegato, non
+   aperto"** (reviewer punto 8, stesso principio già usato con
+   successo per lo scarto dell'11km in `test_atmosfera.py`, citato da
+   CLAUDE.md come esempio corretto): asserire `perigeo_valido == False`
+   SENZA bonus sullo scenario Falcon 9 reale, poi `perigeo_valido ==
+   True` CON bonus — commento esplicito che collega i due, non solo
+   un numero isolato.
+6. **`scompone_perdite`**: riverificare esplicitamente (non assumere)
+   che la tolleranza di chiusura resti stretta con la nuova traiettoria
+   (A,B diversi). Se non regge con la griglia attuale, ritarare i
+   punti di valutazione, documentando il nuovo valore.
+
+**Impatto su Step 8:** nessuna modifica di codice (confermato
+indipendente da `validazione.py`), solo riconferma della suite.
+
+**Impatto su Step 9:** `visualizzazione.py` consuma `assembla_traiettoria()`
+dinamicamente — atteso che i test di chiusura quantitativa restino
+verdi automaticamente. I 3 file di output vanno RIGENERATI. **Aspettativa
+qualitativa esplicita per la re-ispezione (reviewer):** il nuovo
+grafico h(t) NON dovrebbe più mostrare il pattern "sale a 170km poi
+scende a 148km" del Ciclo 9 — ora `vh(tf)→0`, quindi la salita
+dovrebbe appiattirsi verso il target senza ridiscesa marcata.
+
+**Aggiornamento disclaimer CLAUDE.md:** rafforzare la nota già presente
+(Step 7) aggiungendo la chiusura quantitativa: lo scarto di perigeo
+(-21/-23km) trovato al Ciclo 10 è interamente spiegato e superato dal
+bonus di rotazione terrestre già lì quantificato (409 m/s > 67 m/s di
+deficit in velocità).
+
+**Prossimo:** coder implementa questo design consolidato.
+
+#### 5. Esito ciclo (coder + critic-ingegnere, pipeline snellita)
+
+- **coder**: implementato tutto il design consolidato in
+  `lanciatore/validazione.py` (nuove funzioni aggiunte, `risolvi_stadio_2_minimi_quadrati`
+  esistente NON toccata, byte-identica — verificato dal critic-ingegnere).
+  91/91 test verdi (85 pregressi + 6 nuovi). Nuovo target raggiunto a
+  precisione di macchina (h_finale=200.000km esatto, vh_finale≈0).
+  Perigeo SENZA bonus = -22.78km (`perigeo_valido=False`), CON bonus
+  rotazione = +200.00km esatto (`perigeo_valido=True`) — entrambi
+  riportati esplicitamente nel risultato, nessuno nascosto. Identità di
+  chiusura di `scompone_perdite` riverificata con la nuova traiettoria:
+  regge senza bisogno di ritarare la griglia (residuo ~1.5e-4 m/s,
+  ~1.9e-8 relativo). Rigenerati i 3 file di output dello Step 9 — il
+  pattern "sale poi scende" del Ciclo 9 è sparito (resta un lieve
+  overshoot di ~2km, tre ordini di grandezza più piccolo, atteso: il
+  target vincola solo lo stato a `t=tf`, non la monotonia nel mezzo).
+  Segnalata onestamente un'ambiguità sulla copertura di test della
+  vecchia funzione dopo il cambio di default, risolta con un nuovo test
+  standalone dedicato invece di lasciarla diventare dead code.
+- **critic-ingegnere**: ricalcolo INDIPENDENTE (script separato) di
+  entrambi i casi oracolo (perigeo -62.50/-22.77km, coincidenza a
+  centesimi di km) e del caso con bonus (perigeo +200.00km esatto,
+  atteso per costruzione dato che vh=0 implica un apside a quella
+  quota). Confermato che il nuovo target è raggiunto a precisione di
+  macchina nell'assemblaggio reale. Confermato `risolvi_stadio_2_minimi_quadrati`
+  byte-identica e genuinamente testata (non dead code). Identità di
+  chiusura riverificata indipendentemente. Step 8/9 confermati non
+  toccati e verdi. Nessun altro modulo toccato. 91/91 confermati.
+  Δv ideale totale invariato (9138.15 m/s, dentro range, margine
+  invariato). **Un solo elemento del piano non ancora eseguito
+  segnalato: l'aggiornamento del disclaimer CLAUDE.md con la chiusura
+  quantitativa** — completato subito dopo dall'orchestratore (vedi
+  sotto). Segnalata anche una fragilità minore di leggibilità (i guess
+  di default di `esegui_validazione` puntavano ai vecchi costanti,
+  l'ottimizzatore convergeva comunque correttamente ma il nome non
+  corrispondeva all'uso) — corretta dall'orchestratore.
+- **Chiusura (io):** aggiornato il disclaimer in CLAUDE.md con la
+  chiusura quantitativa del Ciclo 10 (nuova sezione "Chiusura
+  quantitativa", 2026-08-18). Corretto il default di
+  `esegui_validazione` per usare i guess `*_QUOTA` corretti (nessuna
+  modifica di logica, solo chiarezza). 91/91 riconfermati dopo la
+  modifica.
+
+**Ciclo 10: COMPLETATO.** La scoperta più significativa del progetto
+(Step 9: la validazione Falcon 9 non produceva un'orbita stabile) è ora
+chiusa con una spiegazione quantitativa verificata due volte in modo
+indipendente: il deficit di perigeo non è un difetto del codice o della
+fisica implementata, è la conseguenza diretta e ora misurata di una
+scelta di scope dichiarata fin dall'inizio del progetto (niente
+rotazione terrestre). Esplorate e scartate con evidenza numerica due
+alternative (obiettivo auto-consistente, tempo di bruciamento libero)
+prima di arrivare a questa spiegazione — nessuna scorciatoia, il
+percorso è documentato per intero in questo log. Prossimo step
+proposto: Step 10 (validazione e documentazione dei limiti — questa
+scoperta e la sua chiusura sono un candidato naturale per VALIDATION.md).
