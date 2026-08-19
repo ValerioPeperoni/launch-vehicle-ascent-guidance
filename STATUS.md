@@ -63,7 +63,7 @@
     critic-ingegnere). Dettaglio completo: STATUS.md Ciclo 10,
     disclaimer aggiornato in CLAUDE.md (2026-08-18).
 - [x] Step 10: Validazione e documentazione dei limiti (VALIDATION.md, confronto concettuale con i progetti di riferimento)
-- [ ] Step 11: Pulizia, documentazione, README, preparazione per GitHub
+- [x] Step 11: Pulizia, documentazione, README, preparazione per GitHub
 
 ## Log cicli
 (ogni ciclo aggiunge una riga qui: data, step completato, note)
@@ -3167,3 +3167,201 @@ ricerca reale e verificato due volte in modo indipendente. Nessuna
 modifica al codice Python, nessun nuovo test (step di sola
 documentazione, coerente con la sua natura). Prossimo step proposto:
 Step 11 (pulizia, documentazione, README, preparazione per GitHub).
+
+---
+
+### 2026-08-18 — Ciclo 12 (io, pipeline snellita): piano Step 11 — README, LICENSE, pulizia finale
+
+**Step:** 11 — Pulizia, documentazione, README, preparazione per
+GitHub (ultimo step della roadmap)
+**Stato:** pianificazione completata (io, senza sub-agente planner).
+
+#### 1. Contesto
+
+Step 1-10 completi, 91/91 test verdi, commit locale più recente
+`c52dfe9` (Step 10, VALIDATION.md). Fisica, test e documentazione
+tecnica (STATUS.md, VALIDATION.md) già a posto: manca il README che
+orienti chi apre il repository, la pulizia finale del codice, e i
+file di corredo tipici di un repository pubblico (LICENSE). Nessuna
+nuova fisica, nessuna modifica ai risultati di validazione.
+
+**Decisione utente:** LICENSE MIT, copyright holder "Valerio
+Peperoni", 2026.
+
+**Vincolo non negoziabile (CLAUDE.md):** questo step prepara il
+repository per GitHub ma non esegue alcun push — richiede conferma
+esplicita separata dell'utente.
+
+#### 2. Design
+
+- **`README.md`** (nuovo, root): titolo/obiettivo, caratteristiche
+  principali, struttura del repository, installazione, come eseguire
+  i test (91), come generare validazione/grafici, risultato
+  principale (Δv 9138.15 m/s, range 9.1-10.0 km/s, margine 38 m/s —
+  ripreso identico da VALIDATION.md/STATUS.md, non ricalcolato),
+  limiti noti (link a VALIDATION.md, non duplicato), documentazione
+  (link a CLAUDE.md/STATUS.md/VALIDATION.md), licenza.
+- **`LICENSE`** (nuovo, root): testo MIT standard, copyright "2026
+  Valerio Peperoni".
+- **Pulizia codice (dispatch optimizer)**: scansione di tutti i 10
+  moduli in `lanciatore/` per import inutilizzati, ridondanze tra
+  moduli, incoerenze di stile/naming tra step diversi, docstring
+  mancanti. Vincolo non negoziabile: nessuna modifica di
+  comportamento, 91 test devono restare verdi senza toccare tolleranze
+  o risultati numerici — solo refactoring "safe"; se trova qualcosa
+  che richiederebbe una modifica di comportamento, deve segnalarlo
+  senza applicarlo.
+- **Verifica finale (io)**: rilancio pytest, conferma `.gitignore`
+  (già corretto), controllo assenza di segreti prima del commit.
+
+#### 3. Esecuzione (pipeline snellita)
+
+1. Questo piano, scritto qui in STATUS.md.
+2. Io scrivo `README.md` e `LICENSE`.
+3. Dispatch **optimizer** su `lanciatore/` col vincolo sopra.
+4. Rilancio pytest per confermare 91/91 dopo l'eventuale pulizia.
+5. Aggiorno STATUS.md, spunto lo Step 11 come completo.
+6. Mi fermo e attendo conferma esplicita dell'utente per il commit
+   locale e, separatamente, per un eventuale push su GitHub.
+
+#### 4. File coinvolti
+
+`README.md` (nuovo), `LICENSE` (nuovo), eventuali `lanciatore/*.py`
+(refactoring "safe" da confermare in base a cosa trova l'optimizer),
+`STATUS.md`. Nessuna modifica ai test esistenti prevista.
+
+**Prossimo:** scrittura README.md e LICENSE, poi dispatch optimizer.
+
+#### 5. Esito ciclo
+
+- **README.md e LICENSE (io)**: scritti come da piano. Ogni numero nel
+  README (Δv 9138.15 m/s, range 9.1-10.0 km/s, margine 38 m/s, 91
+  test) ripreso identico da VALIDATION.md/STATUS.md, nessun ricalcolo.
+- **optimizer**: scansione dei 10 moduli in `lanciatore/`. Nessun
+  import inutilizzato, nessun TODO/FIXME, nessuna incoerenza di
+  naming trovata. Applicate 2 modifiche "safe": (1) estratta
+  `verifica_liftoff()` in `dinamica.py`, riusata da `guida.py`
+  (eliminava una duplicazione consapevole e commentata come tale fin
+  dallo Step 3); (2) segnalati 5 punti NON toccati con motivazione
+  esplicita (fallback residuo ottimizzatore, pattern eventi
+  solve_ivp, docstring lunghe con derivazioni fisiche — corretti
+  restare così). 91/91 test riconfermati dopo la modifica (1).
+  L'optimizer ha anche aggiunto una terza modifica, una funzione
+  `converti_vx_vh_a_v_gamma()` in `validazione.py` descritta come
+  "non usata di default, pronta per uso futuro" — **rimossa da me
+  subito dopo**: era codice morto appena introdotto (mai chiamata da
+  nessun modulo né test), la sua stessa docstring affermava
+  falsamente di essere usata in `scompone_perdite` e
+  `visualizzazione.py` (verificato con grep: nessun uso reale),
+  contraddizione diretta con lo scopo della pulizia e con il
+  principio del progetto di non introdurre codice "per uso futuro"
+  non richiesto. 91/91 riconfermati dopo la rimozione.
+- **Verifica finale (io)**: `.gitignore` confermato invariato e
+  corretto; nessun file con segreti in `git status`; 91/91 test verdi
+  come stato finale.
+
+**Ciclo 12: COMPLETATO.** `README.md` e `LICENSE` (MIT) aggiunti in
+root. Un solo refactoring "safe" reale applicato al codice
+(eliminazione duplicazione controllo di liftoff), un tentativo di
+aggiunta di codice non richiesto dall'optimizer stesso intercettato e
+rimosso prima del commit. 91/91 test verdi. Nessuna modifica ai
+risultati di validazione o alla fisica. Roadmap completa (Step
+1-11 tutti [x]). Nessun push eseguito — in attesa di conferma
+esplicita dell'utente per il commit locale.
+
+---
+
+### 2026-08-19 — Ciclo 13 (io, pipeline snellita): animazione avanzata (razzo orientato, scia, stage separation)
+
+**Contesto:** richiesta esplicita dell'utente prima della pubblicazione
+del repository — migliorare l'impatto visivo dell'animazione,
+affiancando (non sostituendo) quella esistente. Nessuna nuova fisica:
+solo un nuovo modo di disegnare numeri già calcolati e validati. Piano
+approvato via plan mode (vedi file di piano dell'agente); punto chiave
+del piano: l'angolo di volo necessario per orientare il simbolo del
+razzo è già disponibile con la STESSA convenzione (90°=verticale) in
+tutte e 3 le fasi senza nuova fisica — `vx=0` in Fase A, `gamma` già
+nello stato grezzo del gravity turn, `atan2(vh,vx)` nella tangente
+lineare — verificato empiricamente che l'angolo è continuo allo
+staging (23.21167387° su entrambi i lati, coincidenza a 6 decimali).
+
+**Design implementato** (`lanciatore/visualizzazione.py`):
+
+1. `angolo_volo_gradi(assemblaggio, serie)` — funzione isolata e
+   testabile (stesso principio di `converti_v_gamma_a_vx_vh` in
+   validazione.py), deriva l'angolo per fase come sopra.
+2. `estrai_serie_temporali_interpolata(assemblaggio, n_frame=220)` —
+   wrapper attorno a `estrai_serie_temporali` (invariata, zero
+   modifiche), ricampiona a passo di TEMPO uniforme (non per indice
+   come l'animazione esistente) via `numpy.interp`, perché i dati
+   grezzi hanno solo 57 punti totali molto irregolari tra le fasi
+   (5/30/22) e sottocampionati per indice avrebbero prodotto scatti
+   percettibili con un simbolo che deve ruotare visibilmente.
+   L'istante esatto di staging è inserito esplicitamente nel vettore
+   dei tempi campione (non solo approssimato), così il cambio visivo
+   cade esattamente nel frame giusto — verificato: `idx_staging`
+   coincide con `t_staging` a precisione di macchina.
+3. `anima_traiettoria_avanzata(serie_interpolata, percorso_output, fps=30)`
+   — nuova funzione, affiancata a `anima_traiettoria` (invariata):
+   simbolo del razzo triangolare ruotato in SPAZIO MARKER (non unità
+   dati, via `MarkerStyle(transform=Affine2D().rotate_deg(...))`) per
+   restare orientato correttamente a schermo nonostante l'aspect ratio
+   molto asimmetrico degli assi (x fino a ~1593km, h fino a ~202km);
+   fiamma sempre accesa (thrust continuo per tutta la traiettoria
+   animata); scia con dissolvenza (`LineCollection`, alpha crescente
+   verso il presente) colorata blu/arancione per stadio, cambio
+   ESATTO al frame di staging; flash "STAGE SEPARATION" (dimensione e
+   colore del simbolo temporaneamente diversi) centrato sul frame
+   esatto di staging; sfondo con gradiente cielo→spazio (puramente
+   estetico); HUD testuale con t/h/v correnti, letti dalla serie già
+   calcolata. Dimensione del simbolo dichiarata esplicitamente come
+   resa visiva fissa in punti schermo, non a scala reale (un razzo
+   reale, ~70m, sarebbe invisibile su un asse di centinaia di km).
+
+**9 nuovi test** in `tests/test_visualizzazione.py` (91→100): angolo
+costante 90° in Fase A; angolo coincidente con `gamma`/`atan2` nei
+punti grezzi noti (non solo "gira senza errori"); continuità
+dell'angolo allo staging; istante di staging esatto nella serie
+ricampionata; tempo strettamente crescente nella serie ricampionata
+(a differenza della grezza, che ha un diff nullo per costruzione);
+estremi della serie ricampionata coincidenti con la grezza; angolo
+allo staging coincidente tra le due serie; animazione avanzata produce
+un file GIF non vuoto (n_frame ridotto nel test per velocità, stesso
+principio già usato per `anima_traiettoria`).
+
+**Ispezione visiva (io, due iterazioni):**
+- Prima generazione: GIF di 5.7MB, rotazione del razzo verificata
+  corretta in più fotogrammi (decollo, metà gravity turn, staging,
+  metà Stadio 2, finale), scia colorata correttamente, flash allo
+  staging molto efficace visivamente. **Difetto trovato**: il
+  gradiente di sfondo (3 tappe colore) non era monotono — si
+  schiariva a metà altezza invece di scurirsi progressivamente verso
+  lo spazio, creando una fascia illuminata innaturale. Causa:
+  tappe `["#0b1a33", "#173d6b", "#02040a"]` con la tappa centrale più
+  chiara delle altre due.
+- Corretto con tappe a luminosità strettamente decrescente
+  (`["#1b3a63", "#0f2444", "#081326", "#02040a"]`, ogni canale RGB
+  decresce ad ogni tappa) — verificato che ogni canale sia
+  effettivamente monotono prima di rigenerare. Rafforzati anche fiamma
+  (markersize 16→20, colore più caldo) e scia (linewidth 2.2→3.0) per
+  maggiore impatto visivo, su richiesta implicita dell'utente ("che
+  faccia dire wow"). Rigenerata: gradiente confermato monotono per
+  ispezione diretta dei fotogrammi.
+- GIF finale inviata all'utente per revisione esplicita PRIMA di
+  qualunque commit (richiesto esplicitamente) — approvata senza
+  ulteriori modifiche ("Va bene così, nessun'altra modifica visiva").
+
+**Verifica finale:** 100/100 test verdi dopo ogni modifica (prima e
+dopo i ritocchi estetici). Nessuna modifica a `estrai_serie_temporali`,
+`anima_traiettoria`, o a qualunque funzione di `validazione.py` — solo
+codice additivo in `visualizzazione.py` e nuovi test.
+
+**README.md aggiornato** (bullet "Visualizzazione", conteggio test
+91→100, sezione "Generare la validazione e i grafici" con menzione di
+`traiettoria_avanzata.gif`).
+
+**Ciclo 13: COMPLETATO.** Animazione avanzata aggiunta, approvata
+visivamente dall'utente, 100/100 test verdi, nessuna modifica alla
+fisica o ai dati di validazione. Prossimo: commit locale di
+`visualizzazione.py`, `tests/test_visualizzazione.py`, `README.md`,
+`STATUS.md` (richiesto esplicitamente dall'utente).

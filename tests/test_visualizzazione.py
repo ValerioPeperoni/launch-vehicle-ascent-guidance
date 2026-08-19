@@ -207,7 +207,80 @@ def test_x_fase_a_sintetizzato_a_zero(serie):
 
 
 # ---------------------------------------------------------------------------
-# 5. Grafici/animazione girano senza eccezioni e producono file non vuoti.
+# 5. Angolo di volo e serie interpolata (animazione avanzata): angolo
+#    coerente con gamma/atan2 nei punti grezzi noti, staging preservato
+#    come frame esatto del ricampionamento.
+# ---------------------------------------------------------------------------
+
+
+def test_angolo_volo_fase_a_costante_90_gradi(assemblaggio, serie):
+    angolo = viz.angolo_volo_gradi(assemblaggio, serie)
+    n_fase_a = serie["n_fase_a"]
+    assert np.all(angolo[:n_fase_a] == 90.0)
+
+
+def test_angolo_volo_gravity_turn_coincide_con_gamma_grezzo(assemblaggio, serie):
+    gt = assemblaggio["risultato_1"]["gravity_turn"]
+    angolo = viz.angolo_volo_gradi(assemblaggio, serie)
+    n_fase_a = serie["n_fase_a"]
+    n_gt = serie["n_gravity_turn"]
+    assert np.allclose(angolo[n_fase_a : n_fase_a + n_gt], np.degrees(gt.y[3]))
+
+
+def test_angolo_volo_tangente_lineare_coincide_con_atan2(assemblaggio, serie):
+    tl = assemblaggio["risultato_2"]
+    angolo = viz.angolo_volo_gradi(assemblaggio, serie)
+    n_fase_a = serie["n_fase_a"]
+    n_gt = serie["n_gravity_turn"]
+    atteso = np.degrees(np.arctan2(tl.y[3], tl.y[2]))
+    assert np.allclose(angolo[n_fase_a + n_gt :], atteso)
+
+
+def test_angolo_volo_continuo_allo_staging(assemblaggio, serie):
+    # La direzione della velocita' e' fisicamente continua allo staging
+    # (solo la massa salta, vedi test_chiusura_massa_ai_due_lati_dello_staging):
+    # l'angolo calcolato dal lato gravity turn (gamma) e dal lato tangente
+    # lineare (atan2) devono quindi coincidere allo stesso istante.
+    angolo = viz.angolo_volo_gradi(assemblaggio, serie)
+    idx_fine_gt, idx_inizio_tl = serie["idx_transizioni"][1], serie["idx_transizioni"][1] + 1
+    assert angolo[idx_fine_gt] == pytest.approx(angolo[idx_inizio_tl], abs=1e-6)
+
+
+@pytest.fixture(scope="module")
+def serie_interpolata(assemblaggio):
+    return viz.estrai_serie_temporali_interpolata(assemblaggio, n_frame=220)
+
+
+def test_serie_interpolata_istante_staging_esatto(serie_interpolata):
+    i = serie_interpolata["idx_staging"]
+    assert serie_interpolata["t"][i] == pytest.approx(serie_interpolata["t_staging"], abs=0.0)
+
+
+def test_serie_interpolata_tempo_strettamente_crescente(serie_interpolata):
+    # A differenza della serie grezza, qui l'istante di staging e' un
+    # unico campione (non duplicato, vedi np.unique in
+    # estrai_serie_temporali_interpolata): il tempo ricampionato deve
+    # essere strettamente crescente ovunque, nessun diff nullo.
+    assert np.all(np.diff(serie_interpolata["t"]) > 0)
+
+
+def test_serie_interpolata_estremi_coincidono_con_serie_grezza(serie, serie_interpolata):
+    assert serie_interpolata["t"][0] == pytest.approx(serie["t"][0])
+    assert serie_interpolata["t"][-1] == pytest.approx(serie["t"][-1])
+    assert serie_interpolata["h"][0] == pytest.approx(serie["h"][0])
+    assert serie_interpolata["h"][-1] == pytest.approx(serie["h"][-1])
+    assert serie_interpolata["v"][-1] == pytest.approx(serie["v"][-1])
+
+
+def test_serie_interpolata_angolo_allo_staging_coincide_con_serie_grezza(assemblaggio, serie, serie_interpolata):
+    idx_fine_gt = serie["idx_transizioni"][1]
+    angolo_grezzo = viz.angolo_volo_gradi(assemblaggio, serie)
+    i = serie_interpolata["idx_staging"]
+    assert serie_interpolata["angolo_gradi"][i] == pytest.approx(angolo_grezzo[idx_fine_gt], abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# 6. Grafici/animazione girano senza eccezioni e producono file non vuoti.
 # ---------------------------------------------------------------------------
 
 
@@ -235,6 +308,18 @@ def test_grafico_traiettoria_produce_file_non_vuoto(serie, cartella_output_test)
 def test_anima_traiettoria_produce_file_non_vuoto(serie, cartella_output_test):
     percorso = os.path.join(str(cartella_output_test), "traiettoria.gif")
     ritorno = viz.anima_traiettoria(serie, percorso, n_frame=20, fps=10)
+    assert ritorno == percorso
+    assert os.path.isfile(percorso)
+    assert os.path.getsize(percorso) > 0
+
+
+def test_anima_traiettoria_avanzata_produce_file_non_vuoto(assemblaggio, cartella_output_test):
+    # n_frame ridotto (non il default 220) solo per velocita' del test,
+    # stesso principio gia' usato da test_anima_traiettoria_produce_file_non_vuoto
+    # (n_frame=20) per l'animazione esistente.
+    serie_interpolata_veloce = viz.estrai_serie_temporali_interpolata(assemblaggio, n_frame=20)
+    percorso = os.path.join(str(cartella_output_test), "traiettoria_avanzata.gif")
+    ritorno = viz.anima_traiettoria_avanzata(serie_interpolata_veloce, percorso, fps=10)
     assert ritorno == percorso
     assert os.path.isfile(percorso)
     assert os.path.getsize(percorso) > 0
