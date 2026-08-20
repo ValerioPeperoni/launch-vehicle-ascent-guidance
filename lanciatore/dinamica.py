@@ -36,6 +36,36 @@ from lanciatore.costanti import CD, G0
 from lanciatore.gravita import accelerazione_gravita
 
 
+def verifica_liftoff(m0, spinta, h0=0.0):
+    """Verifica che la spinta sia sufficiente al lift-off alla quota ``h0``.
+
+    Controllo preventivo comune a più funzioni di integrazione (``integra_ascesa_verticale``,
+    ``integra_gravity_turn`` di Step 3). Estratto come funzione standalone per evitare
+    duplicazione della logica.
+
+    Parametri
+    ---------
+    m0 : float
+        Massa iniziale, kg.
+    spinta : float
+        Spinta del motore, N.
+    h0 : float, opzionale
+        Quota iniziale, m (default 0.0, livello del mare).
+
+    Solleva
+    -------
+    ValueError
+        Se spinta <= m0 * g(h0): il veicolo non decolla con questi parametri.
+    """
+    g0_quota_iniziale = accelerazione_gravita(h0)
+    if spinta <= m0 * g0_quota_iniziale:
+        raise ValueError(
+            "Spinta insufficiente al lift-off: spinta="
+            f"{spinta!r} N <= m0*g(h0)={m0 * g0_quota_iniziale!r} N. "
+            "Il veicolo non decolla con questi parametri."
+        )
+
+
 def derivate_stato(t, y, spinta, isp, cd, area, mdot, m_vuoto):
     """Derivate del vettore di stato [h, v, m] per l'ascesa verticale pura.
 
@@ -169,13 +199,7 @@ def integra_ascesa_verticale(
         definizione fisica (spinta netta iniziale non positiva), quindi
         l'integrazione non avrebbe senso fisico da compiere.
     """
-    g0_quota_iniziale = accelerazione_gravita(h0)
-    if spinta <= m0 * g0_quota_iniziale:
-        raise ValueError(
-            "Spinta insufficiente al lift-off: spinta="
-            f"{spinta!r} N <= m0*g(h0)={m0 * g0_quota_iniziale!r} N. "
-            "Il veicolo non decolla con questi parametri."
-        )
+    verifica_liftoff(m0, spinta, h0)
 
     # Portata massica: definita con G0 costante (convenzione
     # internazionale per Isp), anche se la gravita' del moto usa g(h)

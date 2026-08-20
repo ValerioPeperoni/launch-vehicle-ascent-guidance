@@ -68,6 +68,7 @@ from scipy.integrate import solve_ivp
 from lanciatore import dinamica
 from lanciatore.atmosfera import densita
 from lanciatore.costanti import G0
+from lanciatore.dinamica import verifica_liftoff
 from lanciatore.gravita import accelerazione_gravita
 
 
@@ -327,18 +328,10 @@ def integra_gravity_turn(
         valida per questo step, da segnalare esplicitamente (addendum
         reviewer, punto 1c).
     """
-    # --- Controllo di liftoff (mirror esplicito del controllo in
-    # lanciatore.dinamica.integra_ascesa_verticale, vedi nota "Solleva"
-    # sopra: dinamica.py non va modificato in questo step, quindi il
-    # controllo non e' importabile come funzione standalone e viene
-    # ripetuto qui, consapevolmente, non duplicato in modo silenzioso).
-    g0_quota_iniziale = accelerazione_gravita(h0)
-    if spinta <= m0 * g0_quota_iniziale:
-        raise ValueError(
-            "Spinta insufficiente al lift-off: spinta="
-            f"{spinta!r} N <= m0*g(h0)={m0 * g0_quota_iniziale!r} N. "
-            "Il veicolo non decolla con questi parametri."
-        )
+    # --- Controllo di liftoff (riuso della funzione standalone estratta
+    # da lanciatore.dinamica.verifica_liftoff, eliminando la duplicazione
+    # del controllo gia' presente in Step 2).
+    verifica_liftoff(m0, spinta, h0)
 
     # Portata massica: definita con G0 costante (convenzione
     # internazionale per Isp), condivisa da entrambe le fasi (il
