@@ -1,5 +1,7 @@
 # Simulazione di ascesa e guida di un lanciatore multistadio
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ValerioPeperoni/launch-vehicle-ascent-guidance/blob/master/demo_colab.ipynb)
+
 Simulazione a punto materiale (2D, piano verticale) dell'ascesa
 propulsa di un lanciatore multistadio, con **guida attiva** (non
 traiettoria scriptata) verso un'orbita target: gravity turn in fase
